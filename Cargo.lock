@@ -2987,7 +2987,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "strata-net"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dns-lookup",
  "flate2",
@@ -3007,7 +3007,7 @@ dependencies = [
 
 [[package]]
 name = "strata-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3049,7 +3049,7 @@ dependencies = [
 
 [[package]]
 name = "strata-tray"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "directories",
  "serde_json",
