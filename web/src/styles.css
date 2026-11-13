@@ -459,7 +459,7 @@ button.ux1-pill { cursor: pointer; }
 /* Santé : journal (console sombre dans les deux thèmes) */
 .log-level { width: 220px; }
 :is(.log-level, .sso-role) .dd-btn { height: var(--h-control); }
-.log-box { display: flex; flex-direction: column; height: calc(100vh - 290px); min-height: 280px; overflow: auto; padding: 8px 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; color: var(--text-2); font: 11.5px/1.6 var(--mono); }
+.log-box { display: flex; flex-direction: column; height: calc(100vh - 330px); min-height: 280px; overflow: auto; padding: 8px 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; color: var(--text-2); font: 11.5px/1.6 var(--mono); }
 .log-line { display: flex; gap: 12px; padding: 0 12px; }
 .log-line:hover { background: var(--panel-2); }
 .log-at { flex: none; color: var(--text-3); font-variant-numeric: tabular-nums; }
@@ -479,3 +479,6 @@ button.ux1-pill { cursor: pointer; }
 .sso-ok { display: inline-flex; align-items: center; gap: 6px; color: var(--pvw); font-size: 12.5px; }
 .pem { font: 11px/1.45 var(--mono); }
 .update-offline > div code { overflow-wrap: anywhere; }
+a.btn { color: var(--text); }
+.set-label .badge { text-transform: none; letter-spacing: 0; margin-left: 4px; }
+.role-pick button .badge { align-self: flex-start; }
