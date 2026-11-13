@@ -113,6 +113,12 @@ mod tests {
         let lo = Ipv4Addr::LOCALHOST;
         assert_eq!(connect(lo, port, Duration::from_secs(1)).await, Probe::Open);
         drop(l);
-        assert_eq!(connect(lo, port, Duration::from_secs(1)).await, Probe::Refused);
+        // Windows retries a refused connection for about 2 s before giving up.
+        let closed = connect(lo, port, Duration::from_secs(1)).await;
+        if cfg!(windows) {
+            assert_ne!(closed, Probe::Open);
+        } else {
+            assert_eq!(closed, Probe::Refused);
+        }
     }
 }
