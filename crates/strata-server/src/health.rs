@@ -163,6 +163,17 @@ fn prune(dir: &Path) {
 fn append(line: &JournalLine) {
     let Some(h) = HEALTH.get() else { return };
     let Ok(_w) = h.write.lock() else { return };
+    write_line(h, line);
+}
+
+/// From the panic hook: never waits for the lock (the panic may come from inside `append`).
+fn append_nowait(line: &JournalLine) {
+    let Some(h) = HEALTH.get() else { return };
+    let Ok(_w) = h.write.try_lock() else { return };
+    write_line(h, line);
+}
+
+fn write_line(h: &Health, line: &JournalLine) {
     let path = h.dir.join(format!("journal-{}.jsonl", day_of(line.at)));
     if std::fs::metadata(&path).map(|m| m.len() > JOURNAL_MAX_BYTES).unwrap_or(false) {
         return;
@@ -187,7 +198,7 @@ fn write_crash(kind: &str, message: &str, detail: &str) {
     let id = format!("{stamp}-{}", &paths::new_id()[..6]);
     let crash = Crash { id: id.clone(), at, kind: kind.into(), version: env!("CARGO_PKG_VERSION").into(), message: message.into(), detail: detail.into() };
     let _ = paths::write_json(&h.dir.join("crashes").join(format!("{id}.json")), &crash, false);
-    append(&JournalLine { at, level: "CRASH".into(), target: "crash".into(), message: message.into(), fields: format!("crash={id}") });
+    append_nowait(&JournalLine { at, level: "CRASH".into(), target: "crash".into(), message: message.into(), fields: format!("crash={id}") });
 }
 
 fn list_crashes(dir: &Path) -> Vec<Crash> {
@@ -350,7 +361,7 @@ pub fn export_zip(data_dir: &Path, extra: &[(&str, Vec<u8>)]) -> std::io::Result
     use zip::write::SimpleFileOptions;
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    let mut add = |zip: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>, name: &str, bytes: &[u8]| -> std::io::Result<()> {
+    let add = |zip: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>, name: &str, bytes: &[u8]| -> std::io::Result<()> {
         zip.start_file(name, opts).map_err(std::io::Error::other)?;
         zip.write_all(bytes)
     };

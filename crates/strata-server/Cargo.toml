@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 build = "build.rs"
 
+[lib]
+name = "strata_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "strata-network"
 path = "src/main.rs"

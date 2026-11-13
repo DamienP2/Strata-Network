@@ -18,10 +18,10 @@ const KEEP: usize = 150;
 pub struct Sample {
     pub at: i64,
     /// Whole machine, percent 0..100.
-    pub cpu: f32,
+    pub cpu: f64,
     pub mem_used: u64,
     /// This server process: percent of one core × cores (0..100 of the machine).
-    pub proc_cpu: f32,
+    pub proc_cpu: f64,
     pub proc_mem: u64,
 }
 
@@ -34,6 +34,11 @@ struct Perf {
 }
 
 static PERF: OnceLock<Mutex<Perf>> = OnceLock::new();
+
+/// One decimal (12.3 %).
+fn round1(x: f32) -> f64 {
+    (f64::from(x) * 10.0).round() / 10.0
+}
 
 fn hostname() -> String {
     gethostname::gethostname().to_string_lossy().to_string()
@@ -60,7 +65,7 @@ pub fn start() {
         sys.refresh_memory();
         sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, ProcessRefreshKind::nothing().with_cpu().with_memory());
         let (proc_cpu, proc_mem) = sys.process(pid).map(|p| (p.cpu_usage() / cores as f32, p.memory())).unwrap_or((0.0, 0));
-        let s = Sample { at: crate::paths::now_ms(), cpu: sys.global_cpu_usage(), mem_used: sys.used_memory(), proc_cpu, proc_mem };
+        let s = Sample { at: crate::paths::now_ms(), cpu: round1(sys.global_cpu_usage()), mem_used: sys.used_memory(), proc_cpu: round1(proc_cpu), proc_mem };
         if let Some(p) = PERF.get() {
             let mut p = p.lock().unwrap();
             p.last = s;
@@ -81,7 +86,7 @@ pub fn metrics(with_history: bool) -> Value {
     let p = p.lock().unwrap();
     let mut v = json!({
         "machine": {
-            "cpu": (p.last.cpu * 10.0).round() / 10.0,
+            "cpu": p.last.cpu,
             "cores": p.cores,
             "cpuName": p.cpu_name,
             "memUsed": p.last.mem_used,
@@ -89,7 +94,7 @@ pub fn metrics(with_history: bool) -> Value {
             "hostname": hostname(),
         },
         "process": {
-            "cpu": (p.last.proc_cpu * 10.0).round() / 10.0,
+            "cpu": p.last.proc_cpu,
             "mem": p.last.proc_mem,
             "pid": std::process::id(),
         },

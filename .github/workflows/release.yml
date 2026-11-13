@@ -1,0 +1,110 @@
+name: Release
+
+# Push a tag vX.Y.Z (v1.2 → 1.2.0) to publish Strata Network for Linux and Windows.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: python3 scripts/set-version.py "${GITHUB_REF_NAME}"
+      - run: npm ci
+        working-directory: web
+      - run: node scripts/i18n-check.mjs
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+  build:
+    needs: web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            platform: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            platform: linux-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - name: Version
+        id: v
+        run: echo "version=$(python3 scripts/set-version.py "${GITHUB_REF_NAME}")" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: musl tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }} -p strata-server
+          if [ "${{ runner.os }}" = "Windows" ]; then cargo build --release --locked --target ${{ matrix.target }} -p strata-tray; fi
+      - name: Package
+        run: |
+          v=${{ steps.v.outputs.version }}
+          name="Strata-$v-${{ matrix.platform }}"
+          out=target/${{ matrix.target }}/release
+          mkdir -p "dist/$name"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$out/strata-network.exe" "$out/strata-tray.exe" "dist/$name/"
+            (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)
+          else
+            cp "$out/strata-network" packaging/linux/install.sh "dist/$name/"
+            chmod 755 "dist/$name/strata-network" "dist/$name/install.sh"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+          fi
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        run: |
+          v=${{ steps.v.outputs.version }}
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" -DVersion=$v -DSource="$(cygpath -w "dist/Strata-$v-windows-x86_64")" -O"$(cygpath -w dist)" packaging/windows/strata-network.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Strata Network ${GITHUB_REF_NAME#v}" --generate-notes

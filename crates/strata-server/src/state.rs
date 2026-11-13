@@ -82,6 +82,8 @@ pub struct AppState {
     pub restart: Notify,
     /// Set to true when this cycle ends (sockets close).
     pub closing: watch::Sender<bool>,
+    /// Set to true to stop the server for good.
+    pub stop: watch::Sender<bool>,
     /// Long-lived parts that survive hot restarts.
     pub logins: Arc<Logins>,
     pub sso: Arc<Sso>,

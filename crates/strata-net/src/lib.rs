@@ -6,11 +6,13 @@
 pub mod cidr;
 pub mod mac;
 pub mod mcast;
+pub mod mdns;
 pub mod names;
 pub mod ping;
 pub mod ports;
 pub mod probe;
 pub mod scan;
+pub mod snmp;
 
 /// Raises the open-file limit to its hard maximum (scans hold many sockets);
 /// returns the limit now in force.

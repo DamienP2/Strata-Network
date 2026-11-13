@@ -123,7 +123,8 @@ fn get_json(url: &str) -> Result<Value, String> {
     if !res.status().is_success() {
         return Err(format!("{url} answered {}", res.status().as_u16()));
     }
-    res.body_mut().with_config().limit(4 * 1024 * 1024).read_json::<Value>().map_err(|e| format!("{url} did not send JSON: {e}"))
+    let bytes = res.body_mut().with_config().limit(4 * 1024 * 1024).read_to_vec().map_err(|e| format!("cannot read {url}: {e}"))?;
+    serde_json::from_slice::<Value>(&bytes).map_err(|e| format!("{url} did not send JSON: {e}"))
 }
 
 /// Characters kept as they are in a URL query value.
@@ -373,7 +374,7 @@ impl Sso {
         }
         let mut res = req.send_form(form).map_err(|e| Fail::failed(format!("cannot reach the directory: {e}")))?;
         let status = res.status();
-        let body: Value = res.body_mut().with_config().limit(1024 * 1024).read_json().unwrap_or(Value::Null);
+        let body: Value = res.body_mut().with_config().limit(1024 * 1024).read_to_vec().ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
         if !status.is_success() {
             let detail = body
                 .get("error_description")

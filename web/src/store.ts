@@ -131,6 +131,12 @@ interface Hello {
   [list: string]: unknown;
 }
 
+export interface ScanProgress {
+  done: number;
+  total: number;
+  up: number;
+}
+
 export interface AppStore {
   auth: AuthState | null;
   /** La session a été fermée par une connexion du même utilisateur ailleurs. */
@@ -142,7 +148,8 @@ export interface AppStore {
   toasts: Toast[];
   metrics: Metrics | null;
   health: Health | null;
-  /* Les listes de l'app viennent ici (remplies par le hello, § fromHello). */
+  /** Les scans en cours, par réseau (hello, puis messages `scan`). */
+  scans: Record<string, ScanProgress>;
 
   init: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
@@ -159,6 +166,7 @@ function fromHello(m: Hello): Partial<AppStore> {
   return {
     serverOffset: (m.serverTime || Date.now()) - Date.now(),
     timezone: m.timezone || '',
+    scans: (m.scans as Record<string, ScanProgress> | undefined) ?? {},
   };
 }
 
@@ -198,6 +206,7 @@ export const useApp = create<AppStore>((set, get) => ({
   toasts: [],
   metrics: null,
   health: null,
+  scans: {},
 
   init: async () => {
     try {
@@ -233,7 +242,7 @@ export const useApp = create<AppStore>((set, get) => ({
     }
     resetDisplayPrefs();
     const auth = get().auth;
-    set({ auth: auth ? { ...auth, user: null } : auth, connected: false, metrics: null, health: null });
+    set({ auth: auth ? { ...auth, user: null } : auth, connected: false, metrics: null, health: null, scans: {} });
   },
 
   connect: () => {
@@ -272,6 +281,15 @@ export const useApp = create<AppStore>((set, get) => ({
         case 'error':
           get().toast(String(m.message ?? ''), 'error');
           break;
+        case 'scan': {
+          const id = String(m.networkId ?? '');
+          const scans = { ...get().scans };
+          if (m.running) scans[id] = { done: Number(m.done) || 0, total: Number(m.total) || 0, up: Number(m.up) || 0 };
+          else delete scans[id];
+          set({ scans });
+          serverEvents.dispatchEvent(new CustomEvent('scan', { detail: m }));
+          break;
+        }
         default:
           if (m.type) serverEvents.dispatchEvent(new CustomEvent(m.type, { detail: m }));
       }

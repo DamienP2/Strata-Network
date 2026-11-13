@@ -1,6 +1,6 @@
 [package]
 name = "strata-tray"
-description = "Strata Network launcher"
+description = "Strata Network desktop launcher (macOS menu bar, Windows notification area)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,9 +11,9 @@ path = "src/main.rs"
 
 [dependencies]
 serde_json.workspace = true
-ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+ureq = "3"
+directories = "6"
 
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 tray-icon = "0.26"
 tao = "0.37"
-directories = "6"

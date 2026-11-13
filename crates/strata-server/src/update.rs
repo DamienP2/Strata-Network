@@ -186,7 +186,6 @@ struct Pending {
 }
 
 struct Updater {
-    data_dir: PathBuf,
     exe: PathBuf,
     status: Mutex<Status>,
     previous: Mutex<Option<(SystemTime, String)>>,
@@ -194,17 +193,12 @@ struct Updater {
 
 static UPDATER: OnceLock<Updater> = OnceLock::new();
 
-fn init(data_dir: &Path) -> &'static Updater {
+fn updater() -> &'static Updater {
     UPDATER.get_or_init(|| Updater {
-        data_dir: data_dir.to_path_buf(),
         exe: std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()).unwrap_or_else(|| PathBuf::from(exe_name())),
         status: Mutex::new(Status::default()),
         previous: Mutex::new(None),
     })
-}
-
-fn up() -> Result<&'static Updater, String> {
-    UPDATER.get().ok_or_else(|| "updates are not ready".to_string())
 }
 
 fn dir(data_dir: &Path) -> PathBuf {
@@ -296,7 +290,7 @@ pub fn previous_version() -> Option<String> {
 
 /// `GET /api/system/update` (blocking).
 pub fn info(data_dir: &Path, supervised: bool) -> Value {
-    init(data_dir);
+    updater();
     let s = load_settings(data_dir);
     json!({
         "current": CURRENT,
@@ -394,7 +388,7 @@ pub fn parse_releases(list: &Value) -> Vec<Release> {
 
 /// Asks GitHub for the releases (blocking). The newest one, or `None`.
 pub fn check(data_dir: &Path) -> Result<Option<Release>, String> {
-    init(data_dir);
+    updater();
     if busy() {
         return Err("an update is already running".into());
     }
@@ -438,13 +432,14 @@ fn fetch_releases(data_dir: &Path) -> Result<Vec<Release>, String> {
         404 => return Err(format!("{} not found", s.repo)),
         code => return Err(format!("GitHub answered {code}")),
     }
-    let v: Value = res.body_mut().with_config().limit(32 * 1024 * 1024).read_json().map_err(|e| format!("GitHub sent a bad answer: {e}"))?;
+    let bytes = res.body_mut().with_config().limit(32 * 1024 * 1024).read_to_vec().map_err(|e| format!("cannot read the answer of GitHub: {e}"))?;
+    let v: Value = serde_json::from_slice(&bytes).map_err(|e| format!("GitHub sent a bad answer: {e}"))?;
     Ok(parse_releases(&v))
 }
 
 /// Starts an installation in the background. `version` = one picked in the list (may be older).
 pub fn start_install(data_dir: &Path, version: Option<String>, supervised: bool) -> Result<(), (u16, String)> {
-    init(data_dir);
+    updater();
     if busy() {
         return Err((409, "an update is already running".into()));
     }
@@ -604,7 +599,7 @@ pub fn extract(bytes: &[u8], work: &Path) -> Result<Vec<u8>, String> {
             let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("bad package: {e}"))?;
             for i in 0..z.len() {
                 let mut f = z.by_index(i).map_err(|e| format!("bad package: {e}"))?;
-                let name = f.name().replace('\\', "/");
+                let name = f.name().map(|n| n.replace('\\', "/")).unwrap_or_default();
                 if f.is_file() && (name == exe || name.ends_with(&format!("/{exe}"))) {
                     let mut out = Vec::new();
                     f.read_to_end(&mut out).map_err(|e| format!("bad package: {e}"))?;
@@ -649,7 +644,7 @@ fn permission_hint(e: &std::io::Error, exe: &Path) -> String {
 /// Installs a package (blocking): checks the new program, keeps the current one as
 /// `<bin>.previous` and puts the new one in its place. Returns the new version.
 pub fn install_bytes(data_dir: &Path, bytes: &[u8], allow_older: bool) -> Result<String, String> {
-    let u = init(data_dir);
+    let u = updater();
     let work = dir(data_dir).join(format!("work-{}", paths::new_id()));
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     let result = (|| {
@@ -701,7 +696,7 @@ fn swap_in(exe: &Path, new: &Path) -> Result<(), String> {
 
 /// `POST /api/system/update/rollback` (blocking): back to `<bin>.previous`.
 pub fn rollback(data_dir: &Path) -> Result<String, String> {
-    let u = init(data_dir);
+    let u = updater();
     let prev = previous_path(&u.exe);
     if !prev.exists() {
         return Err("there is no previous version".into());
@@ -756,7 +751,7 @@ pub fn restart_process(supervised: bool) {
 /// At start: counts the starts of a freshly installed version; after 3 failed starts, puts
 /// `<bin>.previous` back and restarts.
 pub fn startup_guard(data_dir: &Path, supervised: bool) {
-    let u = init(data_dir);
+    let u = updater();
     let path = dir(data_dir).join("pending.json");
     let Ok(Some(mut p)) = paths::read_json::<Pending>(&path) else { return };
     if p.to != CURRENT {
@@ -799,7 +794,7 @@ pub fn confirm_after(data_dir: PathBuf, after: Duration) {
 
 /// Checks 30 s after start, then every 6 h, when allowed and nothing is running.
 pub fn spawn_auto_check(data_dir: PathBuf) {
-    init(&data_dir);
+    updater();
     tokio::spawn(async move {
         tokio::time::sleep(AUTO_FIRST).await;
         loop {

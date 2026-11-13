@@ -3,12 +3,30 @@ import { useEffect, useState } from 'react';
 /** Les pages de l'app. Ajouter ici une variante par nouvelle page principale. */
 export type Route =
   | { page: 'home' }
+  | { page: 'scan'; networkId?: string; ip?: string }
+  | { page: 'vlans' }
+  | { page: 'switches'; id?: string }
+  | { page: 'multicast' }
+  | { page: 'topology' }
+  | { page: 'alerts' }
   | { page: 'system'; section?: string; sub?: string }
   | { page: 'help' };
 
-export function parseRoute(pathname: string): Route {
+export function parseRoute(pathname: string, search = ''): Route {
   const parts = pathname.split('/').filter(Boolean).map(decodeURIComponent);
   switch (parts[0]) {
+    case 'scan':
+      return { page: 'scan', networkId: parts[1], ip: new URLSearchParams(search).get('ip') ?? undefined };
+    case 'vlans':
+      return { page: 'vlans' };
+    case 'switches':
+      return { page: 'switches', id: parts[1] };
+    case 'multicast':
+      return { page: 'multicast' };
+    case 'topology':
+      return { page: 'topology' };
+    case 'alerts':
+      return { page: 'alerts' };
     case 'system':
       return { page: 'system', section: parts[1], sub: parts[2] };
     case 'help':
@@ -84,9 +102,9 @@ if (typeof window !== 'undefined') {
 }
 
 export function useRoute(): Route {
-  const [route, setRoute] = useState(() => parseRoute(location.pathname));
+  const [route, setRoute] = useState(() => parseRoute(location.pathname, location.search));
   useEffect(() => {
-    const on = () => setRoute(parseRoute(location.pathname));
+    const on = () => setRoute(parseRoute(location.pathname, location.search));
     addEventListener('popstate', on);
     return () => removeEventListener('popstate', on);
   }, []);

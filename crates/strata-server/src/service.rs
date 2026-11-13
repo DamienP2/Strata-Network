@@ -1,7 +1,6 @@
 //! The system service: systemd (Linux), launchd (macOS), Windows service.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const NAME: &str = "strata-network";
@@ -26,8 +25,9 @@ pub fn supervised() -> bool {
         || std::env::var("SN_SUPERVISED").is_ok_and(|v| v == "1")
 }
 
+#[cfg(unix)]
 fn run(cmd: &str, args: &[&str]) -> anyhow::Result<()> {
-    let st = Command::new(cmd).args(args).status().map_err(|e| anyhow::anyhow!("cannot run {cmd}: {e}"))?;
+    let st = std::process::Command::new(cmd).args(args).status().map_err(|e| anyhow::anyhow!("cannot run {cmd}: {e}"))?;
     if !st.success() {
         anyhow::bail!("{cmd} {} failed ({st})", args.join(" "));
     }
@@ -61,7 +61,7 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE\nLimitNOFILE=65536\n\n[Install]\nWanted
 #[cfg(all(unix, not(target_os = "macos")))]
 pub fn install(bind: &str, data: &Path) -> anyhow::Result<()> {
     let exe = exe()?;
-    if Command::new("id").arg("-u").arg(NAME).output().map(|o| !o.status.success()).unwrap_or(true) {
+    if std::process::Command::new("id").arg("-u").arg(NAME).output().map(|o| !o.status.success()).unwrap_or(true) {
         run("useradd", &["--system", "--no-create-home", "--home-dir", &data.display().to_string(), "--shell", "/usr/sbin/nologin", NAME])?;
     }
     std::fs::create_dir_all(data)?;

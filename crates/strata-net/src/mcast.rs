@@ -4,15 +4,16 @@
 //!   listened to all the time: they give the streams' names and formats (SDP).
 //! - PTP (224.0.1.129, ports 319/320) is listened to all the time: domain and
 //!   grandmaster.
-//! - A sweep joins the groups of a range a few at a time, listens briefly and
-//!   leaves: what arrives tells the source, the format and the rate. Joining a
-//!   group makes the network bring the stream to this machine, so sweeps go in
-//!   small batches and a batch ends early past a rate limit.
+//! - Routers' multicast routing tables, read by SNMP (see `snmp`), give the
+//!   other streams with their sources and rates: nothing is joined.
+//! - Nothing else is joined on its own: joining a group makes the network bring
+//!   the stream here. A single stream can be checked on demand, briefly, and the
+//!   check stops at once if the stream is heavier than allowed.
 
 use std::collections::HashMap;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -20,7 +21,6 @@ use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 
-use crate::cidr::Range;
 
 pub const SAP_GROUPS: [Ipv4Addr; 2] = [Ipv4Addr::new(239, 255, 255, 255), Ipv4Addr::new(224, 2, 127, 254)];
 pub const SAP_PORT: u16 = 9875;
@@ -73,6 +73,33 @@ pub struct Stream {
     pub history: Vec<f32>,
     /// Announced by SAP.
     pub announced: bool,
+    /// Seen in a router's multicast routing table.
+    #[serde(default)]
+    pub routed: bool,
+}
+
+impl Stream {
+    fn new(group: Ipv4Addr, port: u16, source: Option<Ipv4Addr>, kind: Kind, now: u64) -> Self {
+        Stream {
+            group,
+            port,
+            source,
+            kind,
+            encoding: None,
+            name: None,
+            rtp_type: None,
+            ptp_domain: None,
+            ptp_grandmaster: None,
+            bps: 0.0,
+            pps: 0.0,
+            packets: 0,
+            first_seen: now,
+            last_seen: now,
+            history: Vec::new(),
+            announced: false,
+            routed: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
@@ -230,24 +257,8 @@ impl State {
         let announced = self.streams.remove(&Key { group, port, source: None });
         let s = self.streams.entry(key).or_insert_with(|| {
             let (kind, rtp_type) = classify(p, port);
-            let mut s = Stream {
-                group,
-                port,
-                source: Some(source),
-                kind,
-                encoding: None,
-                name: None,
-                rtp_type,
-                ptp_domain: None,
-                ptp_grandmaster: None,
-                bps: 0.0,
-                pps: 0.0,
-                packets: 0,
-                first_seen: now,
-                last_seen: now,
-                history: Vec::new(),
-                announced: false,
-            };
+            let mut s = Stream::new(group, port, Some(source), kind, now);
+            s.rtp_type = rtp_type;
             if let Some(a) = &announced {
                 s.name.clone_from(&a.name);
                 s.encoding.clone_from(&a.encoding);
@@ -290,27 +301,11 @@ impl State {
         }
         if !found {
             let now = now_ms();
-            self.streams.insert(
-                Key { group, port, source: None },
-                Stream {
-                    group,
-                    port,
-                    source: None,
-                    kind: sdp.kind.unwrap_or(Kind::Rtp),
-                    encoding: sdp.encoding.clone(),
-                    name: sdp.name.clone(),
-                    rtp_type: None,
-                    ptp_domain: None,
-                    ptp_grandmaster: None,
-                    bps: 0.0,
-                    pps: 0.0,
-                    packets: 0,
-                    first_seen: now,
-                    last_seen: now,
-                    history: Vec::new(),
-                    announced: true,
-                },
-            );
+            let mut s = Stream::new(group, port, sdp.source, sdp.kind.unwrap_or(Kind::Rtp), now);
+            s.encoding.clone_from(&sdp.encoding);
+            s.name.clone_from(&sdp.name);
+            s.announced = true;
+            self.streams.insert(Key { group, port, source: None }, s);
         }
     }
 
@@ -357,32 +352,40 @@ pub struct Engine {
     iface: Ipv4Addr,
     state: Arc<Mutex<State>>,
     closing: Arc<AtomicBool>,
-    sweeping: Arc<AtomicBool>,
+    checking: Arc<AtomicBool>,
 }
 
-/// How a sweep goes.
+/// Limits of an on-demand check of one stream.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct SweepOptions {
-    pub ports: Vec<u16>,
-    /// Groups joined at the same time.
-    pub batch: usize,
-    /// Listening time per batch, in milliseconds.
-    pub dwell_ms: u64,
-    /// A batch stops early above this rate (megabits per second).
+pub struct CheckOptions {
+    /// Listening time, in milliseconds (at most 5 s).
+    pub max_ms: u64,
+    /// The check stops at once above this rate (megabits per second).
     pub max_mbps: u64,
 }
 
-impl Default for SweepOptions {
+impl Default for CheckOptions {
     fn default() -> Self {
-        SweepOptions { ports: vec![5004, 1234, 5000], batch: 16, dwell_ms: 1200, max_mbps: 2000 }
+        CheckOptions { max_ms: 2000, max_mbps: 100 }
     }
+}
+
+/// What an on-demand check found.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Check {
+    pub received: bool,
+    /// Stopped early because the stream is heavier than allowed.
+    pub cut_short: bool,
+    pub bps: f64,
+    pub pps: f64,
 }
 
 impl Engine {
     /// Starts the SAP and PTP listeners on `iface` (the address of the interface).
     pub fn start(iface: Ipv4Addr) -> Engine {
-        let e = Engine { iface, state: Arc::default(), closing: Arc::default(), sweeping: Arc::default() };
+        let e = Engine { iface, state: Arc::default(), closing: Arc::default(), checking: Arc::default() };
         for g in SAP_GROUPS {
             e.listen(g, SAP_PORT);
         }
@@ -404,8 +407,8 @@ impl Engine {
         self.iface
     }
 
-    pub fn is_sweeping(&self) -> bool {
-        self.sweeping.load(Ordering::Relaxed)
+    pub fn is_checking(&self) -> bool {
+        self.checking.load(Ordering::Relaxed)
     }
 
     /// Stops everything (the listeners leave their groups).
@@ -468,93 +471,79 @@ impl Engine {
         });
     }
 
-    /// Joins `groups` × `ports` a batch at a time and measures what arrives.
-    /// `progress(done, total)` after each batch. Returns the streams received.
-    pub async fn sweep(&self, groups: Vec<Ipv4Addr>, opts: &SweepOptions, progress: impl Fn(u64, u64)) -> usize {
-        if self.sweeping.swap(true, Ordering::SeqCst) {
-            return 0;
+    /// A stream seen in a router's multicast routing table (SNMP): no join,
+    /// no traffic. The port is unknown (0) unless an announcement gives it.
+    pub fn report_routed(&self, group: Ipv4Addr, source: Ipv4Addr, bps: Option<f64>, pps: Option<f64>) {
+        let mut st = self.state.lock().unwrap();
+        let now = now_ms();
+        let keys: Vec<Key> = st.streams.keys().filter(|k| k.group == group && k.source.is_none_or(|s| s == source)).copied().collect();
+        let keys = if keys.is_empty() {
+            let key = Key { group, port: 0, source: Some(source) };
+            st.streams.insert(key, Stream::new(group, 0, Some(source), Kind::Other, now));
+            vec![key]
+        } else {
+            keys
+        };
+        for k in keys {
+            let mut s = st.streams.remove(&k).expect("listed");
+            s.source = Some(source);
+            s.routed = true;
+            s.last_seen = now;
+            let key = Key { source: Some(source), ..k };
+            st.streams.insert(key, s);
+            if let (Some(b), Some(p)) = (bps, pps) {
+                st.set_rate(key, b, p);
+            }
         }
-        let targets: Vec<(Ipv4Addr, u16)> = groups.iter().flat_map(|g| opts.ports.iter().map(move |p| (*g, *p))).collect();
-        let total = targets.len() as u64;
-        let mut found = 0;
-        let mut done = 0;
-        for chunk in targets.chunks(opts.batch.clamp(1, 256)) {
-            if self.closing.load(Ordering::Relaxed) {
+    }
+
+    /// Joins one group for a moment to see what it carries. Refused while
+    /// another check runs; stops as soon as the stream exceeds `max_mbps`.
+    pub async fn check(&self, group: Ipv4Addr, port: u16, opts: &CheckOptions) -> io::Result<Check> {
+        if !group.is_multicast() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a multicast group"));
+        }
+        if self.checking.swap(true, Ordering::SeqCst) {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "a check is already running"));
+        }
+        let r = self.check_one(group, port, opts).await;
+        self.checking.store(false, Ordering::SeqCst);
+        r
+    }
+
+    async fn check_one(&self, group: Ipv4Addr, port: u16, opts: &CheckOptions) -> io::Result<Check> {
+        let sock = join(group, port, self.iface)?;
+        let started = Instant::now();
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(opts.max_ms.clamp(200, 5000));
+        let limit = opts.max_mbps.max(1) as f64 * 1e6;
+        let mut buf = vec![0u8; 9000];
+        let mut seen: HashMap<Key, (u64, u64)> = HashMap::new();
+        let (mut bytes, mut cut_short) = (0u64, false);
+        while let Ok(Ok((n, from))) = tokio::time::timeout_at(deadline, sock.recv_from(&mut buf)).await {
+            let SocketAddr::V4(from) = from else { continue };
+            let key = self.state.lock().unwrap().record(group, port, *from.ip(), &buf[..n]);
+            let e = seen.entry(key).or_default();
+            e.0 += n as u64;
+            e.1 += 1;
+            bytes += n as u64;
+            let secs = started.elapsed().as_secs_f64();
+            if secs > 0.05 && bytes as f64 * 8.0 / secs > limit {
+                cut_short = true;
                 break;
             }
-            found += self.batch(chunk, Duration::from_millis(opts.dwell_ms.clamp(200, 10_000)), opts.max_mbps).await;
-            done += chunk.len() as u64;
-            progress(done, total);
         }
-        self.sweeping.store(false, Ordering::SeqCst);
-        found
-    }
-
-    async fn batch(&self, targets: &[(Ipv4Addr, u16)], dwell: Duration, max_mbps: u64) -> usize {
-        let started = Instant::now();
-        let deadline = tokio::time::Instant::now() + dwell;
-        let total_bytes = Arc::new(AtomicU64::new(0));
-        let over = Arc::new(AtomicBool::new(false));
-        let mut tasks = Vec::new();
-        for &(group, port) in targets {
-            let Ok(sock) = join(group, port, self.iface) else { continue };
-            let (state, total_bytes, over) = (self.state.clone(), total_bytes.clone(), over.clone());
-            tasks.push(tokio::spawn(async move {
-                let mut buf = vec![0u8; 9000];
-                let mut seen: HashMap<Key, (u64, u64)> = HashMap::new();
-                while !over.load(Ordering::Relaxed) {
-                    let Ok(Ok((n, from))) = tokio::time::timeout_at(deadline, sock.recv_from(&mut buf)).await else { break };
-                    let SocketAddr::V4(from) = from else { continue };
-                    let key = state.lock().unwrap().record(group, port, *from.ip(), &buf[..n]);
-                    let e = seen.entry(key).or_default();
-                    e.0 += n as u64;
-                    e.1 += 1;
-                    total_bytes.fetch_add(n as u64, Ordering::Relaxed);
-                }
-                seen
-            }));
+        drop(sock); // leaves the group
+        let secs = started.elapsed().as_secs_f64().max(0.05);
+        let mut st = self.state.lock().unwrap();
+        let (mut bps, mut pps) = (0.0, 0.0);
+        for (k, (b, p)) in &seen {
+            let (kb, kp) = (*b as f64 * 8.0 / secs, *p as f64 / secs);
+            st.set_rate(*k, kb, kp);
+            bps += kb;
+            pps += kp;
         }
-        // Rate guard: stop the batch as soon as it brings too much.
-        let guard = {
-            let (total_bytes, over) = (total_bytes.clone(), over.clone());
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    let secs = started.elapsed().as_secs_f64().max(0.1);
-                    if total_bytes.load(Ordering::Relaxed) as f64 * 8.0 / secs > max_mbps as f64 * 1e6 {
-                        over.store(true, Ordering::Relaxed);
-                        tracing::info!("multicast sweep: batch over {max_mbps} Mb/s, cut short");
-                        return;
-                    }
-                }
-            })
-        };
-        let mut found = 0;
-        for t in tasks {
-            let Ok(seen) = t.await else { continue };
-            let secs = started.elapsed().as_secs_f64().max(0.05);
-            let mut st = self.state.lock().unwrap();
-            for (k, (bytes, packets)) in seen {
-                found += 1;
-                st.set_rate(k, bytes as f64 * 8.0 / secs, packets as f64 / secs);
-            }
-        }
-        guard.abort();
-        found
+        Ok(Check { received: !seen.is_empty(), cut_short, bps, pps })
     }
-}
-
-/// The groups of a multicast range (`239.1.1.0/24`, `239.1.1.1-239.1.1.40`).
-pub fn groups(range: &Range) -> Result<Vec<Ipv4Addr>, String> {
-    if !range.first().is_multicast() || !range.last().is_multicast() {
-        return Err("a multicast range is within 224.0.0.0/4".into());
-    }
-    // Network and broadcast addresses are groups too.
-    let (start, end) = match range.prefix {
-        Some(p) if p < 31 => (range.start - 1, range.end + 1),
-        _ => (range.start, range.end),
-    };
-    Ok((start..=end).map(Ipv4Addr::from).collect())
 }
 
 #[cfg(test)]
@@ -604,12 +593,6 @@ a=source-filter: incl IN IP4 239.10.1.1 10.20.1.22\r\na=rtpmap:96 raw/90000\r\nm
     }
 
     #[test]
-    fn ranges_of_groups() {
-        assert_eq!(groups(&crate::cidr::parse("239.1.1.0/24").unwrap()).unwrap().len(), 256);
-        assert!(groups(&crate::cidr::parse("10.0.0.0/24").unwrap()).is_err());
-    }
-
-    #[test]
     fn announced_then_received() {
         let mut st = State::default();
         st.announce(&parse_sdp(SDP)[0], false);
@@ -622,12 +605,28 @@ a=source-filter: incl IN IP4 239.10.1.1 10.20.1.22\r\na=rtpmap:96 raw/90000\r\nm
         assert_eq!((s.kind, s.name.as_deref(), s.announced), (Kind::Video, Some("CAM-PTZ1 Video"), true));
     }
 
-    /// Sends to a group on loopback and checks the sweep sees it (skipped where multicast on loopback is unavailable).
+    fn engine() -> Engine {
+        Engine { iface: Ipv4Addr::LOCALHOST, state: Arc::default(), closing: Arc::default(), checking: Arc::default() }
+    }
+
+    #[test]
+    fn routed_streams_merge_with_announcements() {
+        let e = engine();
+        e.state.lock().unwrap().announce(&parse_sdp(SDP)[0], false);
+        e.report_routed(Ipv4Addr::new(239, 10, 1, 1), Ipv4Addr::new(10, 20, 1, 22), Some(1.2e9), Some(110_000.0));
+        e.report_routed(Ipv4Addr::new(239, 9, 9, 9), Ipv4Addr::new(10, 0, 0, 9), None, None);
+        let s = e.snapshot();
+        assert_eq!(s.len(), 2);
+        let cam = s.iter().find(|s| s.group == Ipv4Addr::new(239, 10, 1, 1)).unwrap();
+        assert_eq!((cam.port, cam.routed, cam.announced, cam.bps), (5004, true, true, 1.2e9));
+    }
+
+    /// Sends to a group on loopback and checks it (skipped where loopback has no multicast).
     #[tokio::test]
-    async fn sweep_receives() {
+    async fn check_receives_and_cuts_heavy_streams() {
         let group = Ipv4Addr::new(239, 77, 1, 1);
         let iface = Ipv4Addr::LOCALHOST;
-        let e = Engine { iface, state: Arc::default(), closing: Arc::default(), sweeping: Arc::default() };
+        let e = engine();
         let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).unwrap();
         if sock.set_multicast_if_v4(&iface).is_err() || join(group, 45004, iface).is_err() {
             return;
@@ -644,16 +643,16 @@ a=source-filter: incl IN IP4 239.10.1.1 10.20.1.22\r\na=rtpmap:96 raw/90000\r\nm
                 std::thread::sleep(Duration::from_millis(2));
             }
         });
-        let opts = SweepOptions { ports: vec![45004], batch: 4, dwell_ms: 400, max_mbps: 1000 };
-        let found = e.sweep(vec![group, Ipv4Addr::new(239, 77, 1, 2)], &opts, |_, _| {}).await;
+        let c = e.check(group, 45004, &CheckOptions { max_ms: 500, max_mbps: 100 }).await.unwrap();
+        let heavy = e.check(group, 45004, &CheckOptions { max_ms: 2000, max_mbps: 1 }).await.unwrap();
         stop.store(true, Ordering::Relaxed);
         t.join().unwrap();
-        if found == 0 {
-            eprintln!("sweep_receives: no multicast on loopback, skipped");
+        if !c.received {
+            eprintln!("no multicast on loopback, skipped");
             return;
         }
-        let s = e.snapshot();
-        assert_eq!(s[0].group, group);
-        assert!(s[0].pps > 10.0);
+        assert!(!c.cut_short && c.pps > 10.0);
+        assert!(heavy.cut_short);
+        assert_eq!(e.snapshot()[0].group, group);
     }
 }
