@@ -1,0 +1,57 @@
+[package]
+name = "strata-server"
+description = "Strata Network server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "strata-network"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "signal", "net"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+rust-embed = { version = "8", features = ["mime-guess", "include-exclude"] }
+clap = { version = "4", features = ["derive", "env"] }
+argon2 = "0.5"
+rpassword = "7"
+directories = "6"
+arc-swap = "1"
+futures-util = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+sha2 = "0.10"
+ring = "0.17"
+base64 = "0.22"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+jiff = "0.2"
+gethostname = "1"
+if-addrs = "0.15"
+sysinfo = { version = "0.37", default-features = false, features = ["system", "disk"] }
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+x509-parser = "0.18"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+
+[build-dependencies]
+flate2 = "1"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

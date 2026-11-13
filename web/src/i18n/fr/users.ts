@@ -1,0 +1,22 @@
+/** Système › Accès › Utilisateurs. */
+export const users: Record<string, string> = {
+  Users: 'Utilisateurs',
+  'New user': 'Nouvel utilisateur',
+  'Search users': 'Rechercher des utilisateurs',
+  'All users': 'Tous les utilisateurs',
+  you: 'vous',
+  SSO: 'SSO',
+  'Account disabled': 'Compte désactivé',
+  'Edit {name}': 'Modifier {name}',
+  'Sign-in': 'Connexion',
+  'New password': 'Nouveau mot de passe',
+  'At least 8 characters': 'Au moins 8 caractères',
+  'Leave empty to keep it': 'Laisser vide pour le garder',
+  State: 'État',
+  Role: 'Rôle',
+  'Role set by hand': 'Rôle fixé à la main',
+  'Create the user': 'Créer l’utilisateur',
+  'Password of {name}': 'Mot de passe de {name}',
+  'Password changed': 'Mot de passe modifié',
+  'Delete the user “{name}”?': 'Supprimer l’utilisateur « {name} » ?',
+};

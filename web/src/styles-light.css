@@ -1,0 +1,34 @@
+/* Light theme: overrides only. */
+:root[data-theme='light'] {
+  --bg: #eef0f5; --panel: #ffffff; --panel-2: #f5f6fa; --panel-3: #e9ecf3;
+  --line: #dde1ea; --line-2: #cfd4e0;
+  --text: #161925; --text-2: #4f5670; --text-3: #6b7290;
+  --accent: #4f63e6; --accent-2: #3a4bc4; --accent-soft: rgba(79, 99, 230, 0.12);
+  --mask: #0d9488; --on-accent: #ffffff;
+  --live: #e11d48; --live-soft: rgba(225, 29, 72, 0.12); --live-btn: #e11d48;
+  --pvw: #15803d; --warn: #b45309; --key: #a16207;      /* vert et orange foncés pour le texte sur blanc */
+  --pvw-fill: #22c55e; --warn-fill: #f5a524;             /* aplats à encre sombre : teintes vives */
+  /* texte de couleur sur fond clair (le sombre utilise des teintes pâles, ex. #ff8aa0 pour le rouge) */
+  --t-red: #c8183f; --t-green: #15803d; --t-blue: #0369a1; --t-yellow: #a16207; --t-pink: #be185d; --t-violet: #6d28d9; --t-orange: #c2410c;
+  --op-2: #f3f4f8;
+  color-scheme: light;
+}
+:root[data-theme='light'] .topbar { background: var(--panel); }
+:root[data-theme='light'] :is(.brand .brand-f-lead, .brand-name) { color: var(--text); }
+:root[data-theme='light'] .tabs button.on { box-shadow: 0 1px 2px rgba(22, 25, 37, 0.08); }
+:root[data-theme='light'] :is(.ux1-mi.danger, .ux1-mi.danger svg) { color: var(--t-red); }
+:root[data-theme='light'] .ux1-pill.lost { color: var(--t-red); background: rgba(225, 29, 72, 0.1); }
+:root[data-theme='light'] .ux1-user-btn.on .avatar { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
+:root[data-theme='light'] .ux1-cap { border-color: color-mix(in srgb, currentColor 30%, transparent); background: color-mix(in srgb, currentColor 8%, transparent); }
+:root[data-theme='light'] :is(.library, .settings) { background: var(--bg); }
+:root[data-theme='light'] :is(.project-card:hover, .user-card:hover) { box-shadow: 0 6px 18px rgba(22, 25, 37, 0.1); }
+:root[data-theme='light'] .btn.warn { background: var(--warn-fill); border-color: var(--warn-fill); }
+:root[data-theme='light'] .modal-back { background: rgba(22, 25, 37, 0.35); }
+:root[data-theme='light'] .modal.dialog.danger .dialog-icon { color: var(--t-red); }
+:root[data-theme='light'] :is(.toast, .menu, .modal, .login-card, .dd-list, .tip, .save-bar) { box-shadow: 0 12px 32px rgba(22, 25, 37, 0.16); }
+:root[data-theme='light'] .login-page { background: radial-gradient(ellipse at 30% 0%, #dfe3fb 0%, var(--bg) 60%); }
+:root[data-theme='light'] .user-card.role-admin { --role: var(--t-red); }
+:root[data-theme='light'] .badge.role-admin { color: var(--t-red); }
+:root[data-theme='light'] :is(.log-box) { --bg: #0b0c12; --panel: #12141d; --panel-2: #181b26; --panel-3: #1f2331; --line: #262a3a; --line-2: #323750; --text: #e6e8f2; --text-2: #a3a8bf; --text-3: #8a90ad; color-scheme: dark; }
+:root[data-theme='light'] .badge.bad { color: var(--t-red); }
+:root[data-theme='light'] .log-box { --pvw: #22c55e; --warn: #f5a524; --live: #ff3b5c; --accent-2: #bfcaff; }
