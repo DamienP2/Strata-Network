@@ -22,7 +22,7 @@ import { locale, t } from '../i18n';
 import { api, useApp, useChanged } from '../store';
 import { errorText } from '../ui/serverError';
 import { fmtAgo, toMs } from '../ui/format';
-import { inSubnet, intToIp, ipToInt } from './ip';
+import { inSubnet } from './ip';
 import type { Address, AlertKind, Kind, Network, Stream, Switch, SwitchPort, Vlan } from './types';
 
 /** Toast d'erreur d'une exception (texte traduit, brut en infobulle). */
@@ -316,5 +316,3 @@ export function useUnseenAlerts(enabled: boolean): number {
   useChanged('alerts', load);
   return n;
 }
-
-export { intToIp, ipToInt };
