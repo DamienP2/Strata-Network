@@ -40,7 +40,7 @@ export function PortChip({ ip, p, svc, children }: { ip: string; p: Address['por
   );
   if (!p.web) return <span className="port-chip">{body}</span>;
   return (
-    <a className="port-chip" href={`${p.web.scheme}://${ip}:${p.port}/`} target="_blank" rel="noreferrer" title={p.web.title || t('Open')} onClick={(e) => e.stopPropagation()}>
+    <a className="port-chip" href={`${p.web.scheme}://${ip}:${p.port}/`} target="_blank" rel="noreferrer" title={p.web.title || t('Open the page')} onClick={(e) => e.stopPropagation()}>
       {body} <ExternalLink size={11} />
     </a>
   );

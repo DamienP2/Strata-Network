@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Crosshair, Ellipsis, FileDown, FileUp, LayoutGrid, List, LoaderCircle, Network as NetworkIcon, Pencil, Plus, Radar, RefreshCw, Save, Search, Square, Trash2, X } from 'lucide-react';
-import { t, tn } from '../i18n';
+import { t, tc, tn } from '../i18n';
 import { api, can, serverEvents, useApp, useChanged } from '../store';
 import { navigate } from '../router';
 import { Field } from '../settings/ui';
@@ -157,7 +157,7 @@ function ScanLayout({
 }
 
 function scheduleText(mins: number): string {
-  return t('Planned scan: every {time}', { time: mins >= 60 ? t('{n} h', { n: mins / 60 }) : t('{n} min', { n: mins }) });
+  return t('Planned scan: {time}', { time: mins >= 60 ? t('{n} h', { n: mins / 60 }) : t('{n} min', { n: mins }) });
 }
 
 /* ---------- Un réseau : liste ou plan, fiche à droite ---------- */
@@ -200,11 +200,28 @@ function NetworkView({ net, vlans, switches, editable, ip }: { net: Network; vla
     });
   }, []);
 
-  // Le scan en cours : une ligne à la fois, puis tout relire à la fin.
+  // Le scan en cours : les lignes arrivent une à une (regroupées toutes les 300 ms), puis tout est relu à la fin.
   useEffect(() => {
+    let batch: Address[] = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const flush = () => {
+      timer = undefined;
+      const list = batch;
+      batch = [];
+      setAddrs((old) => {
+        const m = new Map(old ?? []);
+        for (const a of list) {
+          const n = ipToInt(a.ip);
+          if (n !== null) m.set(n, a);
+        }
+        return m;
+      });
+    };
     const onAddress = (e: Event) => {
       const m = (e as CustomEvent<{ networkId: string; address: Address }>).detail;
-      if (m.networkId === net.id && m.address) put(m.address);
+      if (m.networkId !== net.id || !m.address) return;
+      batch.push(m.address);
+      timer ??= setTimeout(flush, 300);
     };
     const onScan = (e: Event) => {
       const m = (e as CustomEvent<{ networkId: string; running: boolean }>).detail;
@@ -213,10 +230,11 @@ function NetworkView({ net, vlans, switches, editable, ip }: { net: Network; vla
     serverEvents.addEventListener('address', onAddress);
     serverEvents.addEventListener('scan', onScan);
     return () => {
+      clearTimeout(timer);
       serverEvents.removeEventListener('address', onAddress);
       serverEvents.removeEventListener('scan', onScan);
     };
-  }, [net.id, put, load]);
+  }, [net.id, load]);
 
   useEffect(() => {
     const n = ipToInt(ip);
@@ -275,7 +293,7 @@ function NetworkView({ net, vlans, switches, editable, ip }: { net: Network; vla
     setSel(n);
     if (n === null) return;
     const a = addrs?.get(n);
-    if (a?.isNew && editable) void patch(intToIp(n), { isNew: false });
+    if (a?.isNew) void patch(intToIp(n), { isNew: false }); // permis à tous
   };
 
   const patch = async (ipText: string, body: Record<string, unknown>) => {
@@ -383,10 +401,10 @@ function NetworkView({ net, vlans, switches, editable, ip }: { net: Network; vla
                 </button>
               ) : (
                 <button className="btn primary" onClick={() => void start()}>
-                  <Radar size={14} /> {t('Scan')}
+                  <Radar size={14} /> {tc('verb', 'Scan')}
                 </button>
               ))}
-            <button className="icon-btn" title={t('More')} onClick={menu}>
+            <button className="icon-btn" title={t('More actions')} onClick={menu}>
               <Ellipsis size={14} />
             </button>
             <input
@@ -411,12 +429,12 @@ function NetworkView({ net, vlans, switches, editable, ip }: { net: Network; vla
               {(
                 [
                   ['all', t('All addresses'), counts.all],
-                  ['used', t('Used'), counts.used],
-                  ['free', t('Free'), counts.free],
-                  ['offline', t('Offline'), counts.offline],
+                  ['used', tc('ips', 'Used'), counts.used],
+                  ['free', tc('ips', 'Free'), counts.free],
+                  ['offline', tc('ips', 'Offline'), counts.offline],
                   ['web', t('Web'), counts.web],
-                  ['new', t('New'), counts.new],
-                  ['watched', t('Watched'), counts.watched],
+                  ['new', tc('ips', 'New'), counts.new],
+                  ['watched', tc('ips', 'Watched'), counts.watched],
                 ] as [Chip, string, number][]
               ).map(([id, label, n]) => (
                 <button key={id} className={`asr-chip ${chip === id ? 'on' : ''}`} onClick={() => setChip(id)}>
@@ -515,10 +533,10 @@ function IpTable({
         <colgroup>
           <col style={{ width: 30 }} />
           <col style={{ width: 150 }} />
-          <col style={{ width: '17%' }} />
-          <col style={{ width: '17%' }} />
+          <col style={{ width: '15%' }} />
+          <col style={{ width: '16%' }} />
           <col style={{ width: 150 }} />
-          <col style={{ width: '12%' }} />
+          <col style={{ width: '10%' }} />
           <col />
           <col style={{ width: 80 }} />
           <col style={{ width: 104 }} />
@@ -875,7 +893,7 @@ function HostPanel({
               <div key={p.port} className="svc-row">
                 <PortChip ip={ip} p={p} />
                 <span className="grow" title={p.banner}>
-                  {[p.web?.scheme ?? p.service, p.web?.title ? `« ${p.web.title} »` : '', !p.web && p.banner ? p.banner : ''].filter(Boolean).join(' · ')}
+                  {[p.web?.scheme ?? p.service, p.web?.title ? `«\u00a0${p.web.title}\u00a0»` : '', !p.web && p.banner ? p.banner : ''].filter(Boolean).join(' · ')}
                 </span>
               </div>
             ))}

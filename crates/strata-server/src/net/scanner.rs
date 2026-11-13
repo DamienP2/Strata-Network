@@ -27,8 +27,9 @@ pub fn options(net: &super::model::Network) -> Result<Options, String> {
     Ok(o)
 }
 
-/// Merges what a scan learnt about a machine. Returns the alerts raised.
-fn merge(n: &Net, st: &mut Store, h: Host, now: i64) -> Address {
+/// Merges what a scan learnt about a machine. `inventory`: the first scan of a
+/// network, whose machines are all new: no `newHost` alert for them.
+fn merge(n: &Net, st: &mut Store, h: Host, now: i64, inventory: bool) -> Address {
     let mac = h.mac.clone();
     let a = st.address(h.ip);
     let known_mac = a.mac.clone();
@@ -53,7 +54,7 @@ fn merge(n: &Net, st: &mut Store, h: Host, now: i64) -> Address {
         a.is_new = true;
     }
     let out = a.clone();
-    if first {
+    if first && !inventory {
         let d = [out.name.clone(), out.vendor.clone(), out.mac.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         n.alert(st, "newHost", h.ip, d);
     } else if let (Some(old), Some(new)) = (known_mac, mac) {
@@ -97,6 +98,7 @@ impl Net {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(scan::run(range, opts, tx, stop));
         let mut found: HashSet<Ipv4Addr> = HashSet::new();
+        let inventory = self.store.lock().unwrap().network(&id).is_some_and(|n| n.last_scan.is_none());
         let mut last_progress = Instant::now() - Duration::from_secs(1);
         let progress = |n: &Net, id: &str, running: bool| {
             let scans = n.scans.lock().unwrap();
@@ -110,7 +112,7 @@ impl Net {
                     found.insert(h.ip);
                     let a = {
                         let mut st = self.store.lock().unwrap();
-                        merge(&self, &mut st, h, now_ms())
+                        merge(&self, &mut st, h, now_ms(), inventory)
                     };
                     if let Some(r) = self.scans.lock().unwrap().get_mut(&id) {
                         r.up += 1;
@@ -145,7 +147,7 @@ impl Net {
                                 name_source: None,
                                 ports: vec![],
                             };
-                            merge(&self, &mut st, h, now);
+                            merge(&self, &mut st, h, now, inventory);
                             st.address(ip).via = Some("snmp".into());
                             found.insert(ip);
                         }
@@ -207,7 +209,7 @@ impl Net {
         let a = {
             let mut st = self.store.lock().unwrap();
             match host {
-                Some(h) => merge(self, &mut st, h, now_ms()),
+                Some(h) => merge(self, &mut st, h, now_ms(), false),
                 None => {
                     let a = st.address(ip);
                     a.up = false;

@@ -641,9 +641,17 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 .file-hidden { display: none; }
 .lib-nav-section .grow { flex: 1; }
 .net-page.two:has(> .panel.right) { grid-template-columns: 240px minmax(0, 1fr) 340px; }
-.data-table.ip-rows { table-layout: fixed; }
+.data-table.ip-rows { table-layout: fixed; min-width: 1180px; }
+.panel .prop-row input[type='checkbox'] { flex: none; }
+.net-page:has(> .panel.right) .media-toolbar .search { width: 220px; }
+.media-toolbar > .spacer + .segmented { margin-left: auto; }
 .data-table tbody tr.pad td { padding: 0; border: 0; }
 .data-table tbody tr.pad:hover td { background: none; }
 .set-field > .segmented { align-self: flex-start; }
 .set-field > .segmented button { padding: 5px 10px; font-size: 12px; }
 .modal .set-field > .dd-btn { height: var(--h-control); }
+.dd-btn:disabled { cursor: default; opacity: 0.6; }
+.dd-btn:disabled:hover { border-color: var(--line-2); background: var(--panel-2); }
+:is(.panel, .data-table) :is(input, textarea):disabled { color: var(--text-2); cursor: default; }
+.data-table.plain tbody tr { cursor: default; }
+.data-table.plain tbody tr:hover td { background: none; }

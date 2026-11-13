@@ -12,6 +12,8 @@ const Users = lazy(() => import('./Users').then((m) => ({ default: m.Users })));
 const Security = lazy(() => import('../settings/Security').then((m) => ({ default: m.Security })));
 const General = lazy(() => import('../settings/Settings').then((m) => ({ default: m.General })));
 const Updates = lazy(() => import('../settings/Updates').then((m) => ({ default: m.Updates })));
+const History = lazy(() => import('../settings/History').then((m) => ({ default: m.History })));
+const Snmp = lazy(() => import('../settings/Snmp').then((m) => ({ default: m.Snmp })));
 const Maintenance = lazy(() => import('../settings/Settings').then((m) => ({ default: m.Maintenance })));
 
 export function SystemPage({ section, sub }: { section?: string; sub?: string }) {
@@ -46,6 +48,8 @@ export function SystemPage({ section, sub }: { section?: string; sub?: string })
         {current.id === 'general' && <General />}
         {current.id === 'updates' && <Updates />}
         {current.id === 'maintenance' && <Maintenance />}
+        {current.id === 'history' && <History />}
+        {current.id === 'snmp' && <Snmp />}
       </Suspense>
     </SidePage>
   );

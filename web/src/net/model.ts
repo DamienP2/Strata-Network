@@ -147,9 +147,9 @@ export const hasWeb = (a: Address | undefined) => !!a?.ports.some((p) => p.web);
 
 /* ---------- Formats ---------- */
 
-const num = (v: number, digits = 1) => v.toLocaleString(locale(), { maximumFractionDigits: digits });
+const num = (v: number, digits = 1, min = 0) => v.toLocaleString(locale(), { maximumFractionDigits: digits, minimumFractionDigits: min });
 
-export const fmtMs = (ms: number | undefined) => (ms === undefined || ms === null ? '—' : t('{n} ms', { n: num(ms, ms < 10 ? 1 : 0) }));
+export const fmtMs = (ms: number | undefined) => (ms === undefined || ms === null ? '—' : t('{n} ms', { n: ms < 10 ? num(ms, 1, 1) : num(ms, 0) }));
 
 /** « à l’instant », « il y a 2 min », « jamais ». */
 export function fmtSeen(v: number | undefined): string {

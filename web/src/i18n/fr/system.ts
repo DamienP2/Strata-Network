@@ -22,7 +22,6 @@ export const system: Record<string, string> = {
   'CPU threads': 'Threads CPU',
   'Running for': 'En marche depuis',
   'Running for {time}': 'En marche depuis {time}',
-  'Strata server': 'Serveur Strata',
   CPU: 'CPU',
   Memory: 'Mémoire',
   Processor: 'Processeur',

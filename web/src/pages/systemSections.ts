@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { CloudDownload, Gauge, HeartPulse, Lock, RotateCcw, SlidersHorizontal, Users } from 'lucide-react';
+import { CloudDownload, Gauge, HeartPulse, History, Lock, Network, RotateCcw, SlidersHorizontal, Users } from 'lucide-react';
 import { t } from '../i18n';
 import { can, type PublicUser } from '../store';
 
@@ -24,6 +24,7 @@ export const SYSTEM_GROUPS: SystemGroup[] = [
     sections: [
       { id: 'performance', icon: Gauge, label: () => t('Performance'), admin: true },
       { id: 'health', icon: HeartPulse, label: () => t('Health'), admin: true },
+      { id: 'history', icon: History, label: () => t('History'), admin: true },
     ],
   },
   {
@@ -33,6 +34,11 @@ export const SYSTEM_GROUPS: SystemGroup[] = [
       { id: 'users', icon: Users, label: () => t('Users'), admin: true },
       { id: 'security', icon: Lock, label: () => t('Security'), admin: true },
     ],
+  },
+  {
+    id: 'network',
+    title: () => t('Network'),
+    sections: [{ id: 'snmp', icon: Network, label: () => t('SNMP'), admin: true }],
   },
   {
     id: 'server',

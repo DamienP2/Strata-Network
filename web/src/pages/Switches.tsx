@@ -437,16 +437,16 @@ function PortPanel({
             <div className="prop-row">
               <span className="prop-label">{t('Machine')}</span>
               <Dropdown value={p.host ?? ''} options={hostOptions} disabled={!editable} onChange={(v) => void onPatch(ns, { host: v || null })} />
-              {mm && (
-                <span className="badge warn" title={t('Outside the subnet of VLAN {id} ({subnet})', { id: mm.id, subnet: mm.subnet ?? '' })}>
-                  {t('VLAN')}
-                </span>
-              )}
             </div>
-            {host && host.ip !== displayName(host, host.ip) && (
+            {p.host && (host?.label || host?.name || mm) && (
               <div className="prop-row">
                 <span className="prop-label">{t('IP')}</span>
-                <span className="prop-val ip">{host.ip}</span>
+                <span className="prop-val ip">{p.host}</span>
+                {mm && (
+                  <span className="badge warn" title={t('Outside the subnet of VLAN {id} ({subnet})', { id: mm.id, subnet: mm.subnet ?? '' })}>
+                    {t('VLAN')}
+                  </span>
+                )}
               </div>
             )}
             <div className="prop-row">

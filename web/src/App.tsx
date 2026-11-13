@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { LayoutGrid, Server, type LucideIcon } from 'lucide-react';
-import { t, useLang } from './i18n';
+import { Bell, EthernetPort, Layers, LayoutGrid, ListTree, Radar, Radio, Server, type LucideIcon } from 'lucide-react';
+import { t, tn, useLang } from './i18n';
 import { can, needsLook, useApp, type PublicUser } from './store';
 import { navigate, useRoute, type Route } from './router';
 import { loadDisplayPrefs, useDisplayPrefs } from './displayPrefs';
@@ -17,13 +17,19 @@ import { CrashBanner } from './ui/CrashBanner';
 import { ShortcutsOverlay } from './ui/Shortcuts';
 import { ContextMenuHost } from './ui/ContextMenu';
 import { Empty } from './ui/Empty';
+import { useUnseenAlerts } from './net/model';
 
+const Scan = lazy(() => import('./pages/Scan').then((m) => ({ default: m.Scan })));
+const Vlans = lazy(() => import('./pages/Vlans').then((m) => ({ default: m.Vlans })));
+const Switches = lazy(() => import('./pages/Switches').then((m) => ({ default: m.Switches })));
+const Multicast = lazy(() => import('./pages/Multicast').then((m) => ({ default: m.Multicast })));
+const Topology = lazy(() => import('./pages/Topology').then((m) => ({ default: m.Topology })));
+const Alerts = lazy(() => import('./pages/Alerts').then((m) => ({ default: m.Alerts })));
 const SystemPage = lazy(() => import('./pages/SystemPage').then((m) => ({ default: m.SystemPage })));
 const Help = lazy(() => import('./pages/Help').then((m) => ({ default: m.Help })));
 
 /**
- * Les pages principales, dans l'ordre des onglets de la barre du haut.
- * Les pages réseau (Scan, VLAN, Switchs, Multicast, Topologie) s'ajoutent ici :
+ * Les pages principales, dans l'ordre des onglets de la barre du haut :
  * une variante dans `Route` (router.ts), une entrée dans cette liste.
  */
 interface MainPage {
@@ -34,7 +40,14 @@ interface MainPage {
   visible: (u: PublicUser) => boolean;
   render: (route: Route) => ReactNode;
 }
+const all = () => true;
 const MAIN_PAGES: MainPage[] = [
+  { page: 'scan', path: '/scan', icon: Radar, label: () => t('Scan'), visible: all, render: (r) => (r.page === 'scan' ? <Scan networkId={r.networkId} ip={r.ip} /> : null) },
+  { page: 'vlans', path: '/vlans', icon: Layers, label: () => t('VLAN'), visible: all, render: () => <Vlans /> },
+  { page: 'switches', path: '/switches', icon: EthernetPort, label: () => t('Switches'), visible: all, render: (r) => (r.page === 'switches' ? <Switches id={r.id} /> : null) },
+  { page: 'multicast', path: '/multicast', icon: Radio, label: () => t('Multicast'), visible: all, render: () => <Multicast /> },
+  { page: 'topology', path: '/topology', icon: ListTree, label: () => t('Topology'), visible: all, render: () => <Topology /> },
+  { page: 'alerts', path: '/alerts', icon: Bell, label: () => t('Alerts'), visible: all, render: () => <Alerts /> },
   {
     page: 'system',
     path: '/system',
@@ -50,6 +63,7 @@ function Shell({ route }: { route: Route }) {
   const pages = user ? MAIN_PAGES.filter((p) => p.visible(user)) : [];
   const page = pages.find((p) => p.page === route.page);
   const home = pages[0]?.path;
+  const unseen = useUnseenAlerts(!!user);
 
   // L'accueil, ou une page interdite : la première page principale.
   useEffect(() => {
@@ -72,6 +86,7 @@ function Shell({ route }: { route: Route }) {
                 <button key={p.page} className={on ? 'on' : ''} aria-current={on ? 'page' : undefined} onClick={() => navigate(p.path)}>
                   <p.icon size={14} /> <span className="tab-label">{p.label()}</span>
                   {p.page === 'system' && can.admin(user) && needsLook(health) && <span className="nav-dot warn" />}
+                  {p.page === 'alerts' && unseen > 0 && <span className="nav-dot warn" title={tn(unseen, '{n} unseen alert', '{n} unseen alerts')} />}
                 </button>
               );
             })}

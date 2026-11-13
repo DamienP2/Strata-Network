@@ -144,7 +144,7 @@ WebSocket, besides `changed`:
 
 - **Scan** (`strata_net::scan`): every address of the range by ICMP + TCP + ARP; a network with a `readArp` SNMP agent
   whose ARP table has the address counts it `up` with `via: 'snmp'`. Addresses not found become `up: false` (offline
-  if seen before). Alerts: `newHost` (never seen before), `hostGone` (was up at the previous scan), `ipConflict`
+  if seen before). Alerts: `newHost` (never seen before; not raised by the first scan of a network), `hostGone` (was up at the previous scan), `ipConflict`
   (the scan sees a MAC different from the one known and the old one is still in an ARP table, or two ARP tables
   disagree), `vlanMismatch` (an address plugged on a switch port whose access VLAN has a subnet that does not
   contain the address).
