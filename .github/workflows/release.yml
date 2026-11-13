@@ -95,7 +95,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           v=${{ steps.v.outputs.version }}
-          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" -DVersion=$v -DSource="$(cygpath -w "dist/Strata-$v-windows-x86_64")" -O"$(cygpath -w dist)" packaging/windows/strata-network.iss
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" -DVersion=$v -DSource="$(cygpath -w "$PWD/dist/Strata-$v-windows-x86_64")" -O"$(cygpath -w "$PWD/dist")" packaging/windows/strata-network.iss
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}
