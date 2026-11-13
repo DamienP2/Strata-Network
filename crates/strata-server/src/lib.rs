@@ -348,6 +348,31 @@ pub async fn serve(args: RunArgs, shutdown: impl Future<Output = ()> + Send + 's
         });
         let app = if https.is_some() { app.layer(middleware::from_fn_with_state((https_mode, https_port), https_gate)) } else { app };
         tracing::info!("listening on http://{bind}");
+        // Bound to one network card: this machine still reaches the web app on localhost
+        // (the launcher, the first account), on the same port.
+        let local = if bind.ip().is_unspecified() || bind.ip().is_loopback() {
+            None
+        } else {
+            match tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], bind.port()))).await {
+                Ok(l) => {
+                    let app = app.clone();
+                    let mut closing = shared.closing();
+                    tracing::info!("also listening on http://127.0.0.1:{}", bind.port());
+                    Some(tokio::spawn(async move {
+                        let served = axum::serve(l, app.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(async move {
+                            let _ = closing.wait_for(|v| *v).await;
+                        });
+                        if let Err(e) = served.await {
+                            tracing::error!("local listener: {e}");
+                        }
+                    }))
+                }
+                Err(e) => {
+                    tracing::warn!("cannot also listen on 127.0.0.1:{}: {e}", bind.port());
+                    None
+                }
+            }
+        };
 
         let cycle = shared.clone();
         let mut stop = stop_rx.clone();
@@ -360,6 +385,9 @@ pub async fn serve(args: RunArgs, shutdown: impl Future<Output = ()> + Send + 's
                 let _ = cycle.closing.send(true);
             })
             .await?;
+        if let Some(t) = local {
+            let _ = t.await;
+        }
         if let Some(h) = https {
             h.handle.graceful_shutdown(Some(Duration::from_secs(5)));
             let _ = h.task.await;

@@ -223,20 +223,20 @@ fn read_body(mut res: ureq::http::Response<ureq::Body>) -> (u16, String) {
 /// The server's state for the menu, or `None` when it does not answer.
 pub fn fetch_state(port: u16) -> Option<Value> {
     let a = agent();
-    if let Ok(res) = a.get(&format!("http://localhost:{port}/api/system/tray")).call() {
+    if let Ok(res) = a.get(&format!("http://127.0.0.1:{port}/api/system/tray")).call() {
         let (code, text) = read_body(res);
         if code == 200 {
             return serde_json::from_str(&text).ok();
         }
     }
-    let res = a.get(&format!("http://localhost:{port}/api/health")).call().ok()?;
+    let res = a.get(&format!("http://127.0.0.1:{port}/api/health")).call().ok()?;
     let (code, text) = read_body(res);
     (code == 200).then(|| serde_json::from_str(&text).ok()).flatten()
 }
 
 /// Sends a request to the server; the error is the server's text.
 pub fn send(method: &str, port: u16, path: &str, body: Option<Value>) -> Result<(), String> {
-    let url = format!("http://localhost:{port}{path}");
+    let url = format!("http://127.0.0.1:{port}{path}");
     let a = agent();
     let res = match (method, body) {
         ("PUT", Some(b)) => a.put(&url).header("Content-Type", "application/json").send(b.to_string()),
@@ -401,6 +401,10 @@ pub fn start_server() -> Result<(), String> {
     }
     #[cfg(windows)]
     if output("sc", &["query", WINDOWS_SERVICE]).is_some() {
+        // Signed-in users may start the service; elevation only if this machine refuses.
+        if output("sc", &["start", WINDOWS_SERVICE]).is_some() {
+            return Ok(());
+        }
         let script = format!("Start-Process sc.exe -ArgumentList 'start {WINDOWS_SERVICE}' -Verb RunAs -WindowStyle Hidden");
         return output("powershell", &["-NoProfile", "-Command", &script]).map(|_| ()).ok_or_else(|| "the service did not start".into());
     }

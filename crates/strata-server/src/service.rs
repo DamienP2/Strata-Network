@@ -138,6 +138,10 @@ pub fn control(action: &str) -> anyhow::Result<()> {
 
 // ---------------------------------------------------------------- Windows
 
+/// Windows' default rights on a service, plus start (RP) and stop (WP) for interactive users.
+#[cfg(windows)]
+const SERVICE_SDDL: &str = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPWPDTLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)";
+
 #[cfg(windows)]
 pub fn install(bind: &str, data: &Path) -> anyhow::Result<()> {
     use std::ffi::OsString;
@@ -163,7 +167,17 @@ pub fn install(bind: &str, data: &Path) -> anyhow::Result<()> {
         account_name: None,
         account_password: None,
     };
-    let service = manager.create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)?;
+    let access = ServiceAccess::CHANGE_CONFIG | ServiceAccess::START | ServiceAccess::QUERY_STATUS;
+    // Installing over an existing service (an upgrade) updates it instead.
+    let service = match manager.open_service(WINDOWS_NAME, access) {
+        Ok(existing) => {
+            existing.change_config(&info)?;
+            existing
+        }
+        Err(_) => manager.create_service(&info, access)?,
+    };
+    // Signed-in users may start and stop the service (the launcher), without elevation.
+    let _ = std::process::Command::new("sc.exe").args(["sdset", WINDOWS_NAME, SERVICE_SDDL]).output();
     let restart = ServiceAction { action_type: ServiceActionType::Restart, delay: Duration::from_secs(2) };
     service.update_failure_actions(ServiceFailureActions {
         reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(86400)),
@@ -172,7 +186,10 @@ pub fn install(bind: &str, data: &Path) -> anyhow::Result<()> {
         actions: Some(vec![restart.clone(), restart.clone(), restart]),
     })?;
     service.set_failure_actions_on_non_crash_failures(true)?;
-    service.start::<&str>(&[])?;
+    let running = service.query_status().is_ok_and(|st| st.current_state != windows_service::service::ServiceState::Stopped);
+    if !running {
+        service.start::<&str>(&[])?;
+    }
     println!("{NAME} installed and started (data in {})", data.display());
     Ok(())
 }
@@ -257,13 +274,22 @@ pub mod windows_run {
         let Ok(handle) = service_control_handler::register(super::WINDOWS_NAME, handler) else { return };
         let _ = handle.set_service_status(status(ServiceState::Running, ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN));
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build();
+        let mut code = 0;
         if let Ok(rt) = rt {
             let result = rt.block_on(crate::serve(args, async move {
                 let _ = rx.await;
             }));
             if let Err(e) = result {
                 tracing::error!("server stopped: {e:#}");
+                code = 1;
             }
+            // The server no longer listens: tell Windows at once, so that it can be started
+            // again, without waiting for background work (a lookup, a download) to finish.
+            let mut st = status(ServiceState::Stopped, ServiceControlAccept::empty());
+            st.exit_code = ServiceExitCode::Win32(code);
+            let _ = handle.set_service_status(st);
+            rt.shutdown_timeout(Duration::from_secs(2));
+            std::process::exit(code as i32);
         }
         let _ = handle.set_service_status(status(ServiceState::Stopped, ServiceControlAccept::empty()));
     }

@@ -44,3 +44,15 @@ Filename: "{app}\strata-tray.exe"; Flags: nowait postinstall skipifsilent; Descr
 Filename: "{app}\strata-network.exe"; Parameters: "service uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "service"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Strata Network"""; Flags: runhidden waituntilterminated; RunOnceId: "firewall"
 Filename: "{sys}\taskkill.exe"; Parameters: "/f /im strata-tray.exe"; Flags: runhidden waituntilterminated; RunOnceId: "tray"
+
+[Code]
+// Stops the running service and launcher so that their files can be replaced (upgrade).
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Code: Integer;
+begin
+  Exec(ExpandConstant('{sys}\sc.exe'), 'stop StrataNetwork', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im strata-tray.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Sleep(3000);
+  Result := '';
+end;
