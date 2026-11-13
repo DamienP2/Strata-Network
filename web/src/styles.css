@@ -552,9 +552,9 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 .ip-plan { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 4px; }
 .ipc { position: relative; height: 30px; border-radius: 5px; border: 1px solid var(--line); background: none; color: var(--text-3); font: 600 11px var(--mono); display: grid; place-items: center; cursor: pointer; padding: 0; }
 .ipc:hover { border-color: var(--text-3); color: var(--text); }
-.ipc.used { background: color-mix(in srgb, var(--pvw) 22%, var(--panel-2)); border-color: color-mix(in srgb, var(--pvw) 55%, transparent); color: var(--text); }
-.ipc.off { background: var(--panel-3); border-color: var(--line-2); color: var(--text-2); }
-.ipc.resv { border: 1.5px dashed var(--accent); color: var(--accent-2); }
+.ipc.used { background: color-mix(in srgb, var(--pvw) 28%, var(--panel-2)); border-color: var(--pvw); color: var(--text); }
+.ipc.off { background: color-mix(in srgb, var(--warn) 12%, var(--panel-2)); border-color: color-mix(in srgb, var(--warn) 70%, transparent); color: var(--text-2); }
+.ipc.resv { background: var(--accent-soft); border: 1.5px dashed var(--accent); color: var(--accent-2); }
 .ipc.gw { box-shadow: inset 0 0 0 2px var(--accent); }
 .ipc.na { opacity: 0.25; cursor: default; }
 .ipc.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -624,6 +624,14 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 .ipc.used.named .ipc-n { color: var(--pvw); }
 .ipc-name { font: 500 11px/1.2 Inter, system-ui, sans-serif; color: var(--text-2); text-align: center; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .ipc.used .ipc-name { color: var(--text); }
+.ipc.off.named .ipc-n { color: var(--warn); }
+.ipc.resv.named .ipc-n { color: var(--accent-2); }
+.ipc.resv .ipc-name { color: var(--accent-2); }
+/* A state dot in the corner of every cell of the plan: green answers, orange no longer answers, ring reserved. */
+.ip-plan .ipc::after { content: ''; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; }
+.ip-plan .ipc.used::after { background: var(--pvw); box-shadow: 0 0 6px var(--pvw); }
+.ip-plan .ipc.off::after { background: var(--warn); }
+.ip-plan .ipc.resv::after { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .kind.bad { background: var(--live-soft); color: #ff8aa0; }
 .kind.data { background: rgba(232, 121, 249, 0.15); color: #e879f9; }
 .data-table tbody tr.unseen td { color: var(--text); font-weight: 600; }
