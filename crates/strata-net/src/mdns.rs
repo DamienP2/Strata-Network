@@ -39,7 +39,7 @@ pub struct Service {
     pub host: String,
     pub ip: Option<Ipv4Addr>,
     pub port: u16,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub txt: Vec<String>,
 }
 
@@ -180,5 +180,14 @@ mod tests {
         assert_eq!((s[0].kind.as_str(), s[0].name.as_str(), s[0].port), ("NDI", "VMIX-01 (Output 1)", 5960));
         assert_eq!((s[0].ip, s[0].host.as_str()), (Some(Ipv4Addr::new(10, 10, 0, 120)), "vmix-01.local"));
         assert_eq!(s[0].txt, vec!["groups=prod".to_string()]);
+    }
+
+    /// The web page reads `txt` on every service: it is always sent, empty or not.
+    #[test]
+    fn txt_always_sent() {
+        let s = Service { kind: "NDI".into(), name: "x".into(), host: "h".into(), ip: None, port: 1, txt: vec![] };
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["txt"], serde_json::json!([]));
+        assert!(v["ip"].is_null());
     }
 }

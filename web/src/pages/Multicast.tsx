@@ -278,7 +278,7 @@ function Services({ data }: { data: { at: number; services: Service[] } | null }
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return list
-      .filter((s) => !needle || `${s.kind} ${s.name} ${s.host} ${s.ip ?? ''}`.toLowerCase().includes(needle))
+      .filter((s) => !needle || `${s.kind} ${s.name} ${s.host ?? ''} ${s.ip ?? ''}`.toLowerCase().includes(needle))
       .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
   }, [list, q]);
   if (!data) return <div className="loading">{t('Loading…')}</div>;
@@ -309,7 +309,7 @@ function Services({ data }: { data: { at: number; services: Service[] } | null }
             </thead>
             <tbody>
               {shown.map((s) => (
-                <tr key={`${s.kind}|${s.name}|${s.host}|${s.port}`} title={s.txt.length ? s.txt.join('\n') : undefined}>
+                <tr key={`${s.kind}|${s.name}|${s.host}|${s.port}`} title={s.txt?.length ? s.txt.join('\n') : undefined}>
                   <td>
                     <span className="kind">{s.kind}</span>
                   </td>

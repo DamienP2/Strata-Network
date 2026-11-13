@@ -25,6 +25,8 @@ export const common: Record<string, string> = {
   Machine: 'Machine',
   Server: 'Serveur',
   'Loading…': 'Chargement…',
+  Reload: 'Recharger',
+  'This page could not be shown': 'Cette page n’a pas pu s’afficher',
   'Connecting…': 'Connexion…',
   'No match': 'Aucun résultat',
   'Nothing to choose': 'Rien à choisir',

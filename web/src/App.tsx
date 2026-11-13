@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, type ReactNode } from 'react';
+import { PageGuard } from './ui/PageGuard';
 import { useShallow } from 'zustand/react/shallow';
 import { Bell, EthernetPort, Layers, LayoutGrid, ListTree, Radar, Radio, Server, type LucideIcon } from 'lucide-react';
 import { t, tn, useLang } from './i18n';
@@ -98,9 +99,11 @@ function Shell({ route }: { route: Route }) {
         <UserMenu named />
       </nav>
       <div className="content">
-        <Suspense fallback={<div className="loading">{t('Loading…')}</div>}>
-          {route.page === 'help' ? <Help /> : page ? page.render(route) : !home ? <Empty icon={LayoutGrid} text={t('No page')} /> : null}
-        </Suspense>
+        <PageGuard page={location.pathname}>
+          <Suspense fallback={<div className="loading">{t('Loading…')}</div>}>
+            {route.page === 'help' ? <Help /> : page ? page.render(route) : !home ? <Empty icon={LayoutGrid} text={t('No page')} /> : null}
+          </Suspense>
+        </PageGuard>
       </div>
     </>
   );
