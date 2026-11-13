@@ -170,9 +170,15 @@ pub fn parse_ip_neigh(text: &str) -> HashMap<Ipv4Addr, (Mac, bool)> {
 }
 
 /// The MAC of this machine's own interfaces (absent from the ARP table).
+#[cfg(not(target_os = "linux"))]
+pub fn own_macs() -> HashMap<Ipv4Addr, Mac> {
+    HashMap::new()
+}
+
+/// The MAC of this machine's own interfaces (absent from the ARP table).
+#[cfg(target_os = "linux")]
 pub fn own_macs() -> HashMap<Ipv4Addr, Mac> {
     let mut out = HashMap::new();
-    #[cfg(target_os = "linux")]
     if let Ok(list) = if_addrs::get_if_addrs() {
         for i in list {
             if let std::net::IpAddr::V4(ip) = i.ip() {
