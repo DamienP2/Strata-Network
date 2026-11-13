@@ -111,9 +111,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: "{linux,windows}-*"
           merge-multiple: true
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Strata Network ${TAG#v}" --generate-notes
+          gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/*.exe --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Strata Network ${TAG#v}" --generate-notes
