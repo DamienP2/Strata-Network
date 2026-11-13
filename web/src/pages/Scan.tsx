@@ -740,8 +740,8 @@ function PlanBlock({
       const name = a?.label || (a?.name && !/^\d+(\.\d+){3}$/.test(a.name) ? a.name.split('.')[0] : '');
       const full = [ip, what, a?.label, a?.name].filter(Boolean).join(' · ');
       cells.push(
-        <button key={i} type="button" className={`ipc ${cls} ${n === gw ? 'gw' : ''} ${n === sel ? 'sel' : ''}`} title={full} disabled={out} onClick={() => onSel(n)}>
-          <span className="ipc-n">{i}</span>
+        <button key={i} type="button" className={`ipc ${cls} ${name ? 'named' : ''} ${n === gw ? 'gw' : ''} ${n === sel ? 'sel' : ''}`} title={full} disabled={out} onClick={() => onSel(n)}>
+          <span className="ipc-n">.{i}</span>
           {name && <span className="ipc-name">{name}</span>}
         </button>,
       );

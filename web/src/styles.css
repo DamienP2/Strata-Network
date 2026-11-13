@@ -616,7 +616,12 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 .ip-plan-wait { height: 930px; }
 /* Plan: the number, and under it the label or the DNS name */
 .ip-plan .ipc { height: 54px; display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 1px; padding: 0 4px; min-width: 0; }
+/* The last byte of the address, written ".23" so that it reads as an address: centred alone,
+   in the corner as a small tag when a name fills the cell. */
 .ipc-n { text-align: center; }
+.ipc.named { padding-top: 14px; }
+.ipc.named .ipc-n { position: absolute; top: 3px; left: 3px; padding: 0 4px; border-radius: 4px; font: 600 11px/14px var(--mono); color: var(--text-3); background: color-mix(in srgb, var(--bg) 55%, transparent); }
+.ipc.used.named .ipc-n { color: var(--pvw); }
 .ipc-name { font: 500 11px/1.2 Inter, system-ui, sans-serif; color: var(--text-2); text-align: center; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .ipc.used .ipc-name { color: var(--text); }
 .kind.bad { background: var(--live-soft); color: #ff8aa0; }
