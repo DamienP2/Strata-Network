@@ -1,0 +1,30 @@
+[package]
+name = "strata-net"
+description = "Network discovery engine of Strata Network: IP/port scanning, names, MAC vendors, web detection, multicast"
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+socket2 = { version = "0.6", features = ["all"] }
+surge-ping = "0.8"
+dns-lookup = "3"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+flate2 = "1"
+futures-util = "0.3"
+rand = "0.9"
+if-addrs = "0.15"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+
+# Temporary: own workspace until it joins the main one.
+[workspace]

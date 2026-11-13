@@ -1,0 +1,795 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Strata Network — maquettes</title>
+<!--CSS-->
+<link rel="stylesheet" href="../src/styles.css" />
+<link rel="stylesheet" href="../src/styles-light.css" />
+<!--/CSS-->
+<style>
+/* ── Maquette seulement : changer d’écran ── */
+[hidden] { display: none !important; }
+.view { display: none; height: 100%; }
+.view.on { display: block; }
+
+/* ── Réseau : commun ── */
+.ip, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.net-page { height: 100%; display: grid; grid-template-columns: 240px minmax(0, 1fr) 340px; }
+.net-page > .library { min-width: 0; }
+.net-page.two { grid-template-columns: 240px minmax(0, 1fr); }
+.vlan-sw { width: 10px; height: 10px; border-radius: 3px; flex: none; background: var(--vlan, var(--text-3)); }
+.vlan-tag { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-11); padding: 1px 7px 1px 5px; border-radius: 10px; white-space: nowrap; background: color-mix(in srgb, var(--vlan) 16%, transparent); color: var(--text); }
+.vlan-tag .vlan-sw { width: 8px; height: 8px; border-radius: 2px; }
+.vlan-tag b { font-family: var(--mono); font-weight: 600; }
+.card-table { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: auto; }
+.data-table tbody tr { cursor: pointer; }
+.data-table tbody tr:hover td { background: var(--panel-2); }
+.data-table tbody tr.sel td { background: var(--accent-soft); }
+.data-table tbody tr.free td { color: var(--text-3); }
+.data-table td .nav-dot { display: inline-block; }
+.data-table th.num, .data-table td.num { text-align: right; }
+.cell-edit { width: 100%; min-height: 0; padding: 2px 6px; font-size: 12px; }
+.lbl-empty { color: var(--text-3); }
+
+/* Ports ouverts */
+.ports { display: flex; gap: 4px; flex-wrap: nowrap; }
+.port-chip { display: inline-flex; align-items: center; gap: 3px; font: 600 11px var(--mono); padding: 1px 6px; border-radius: 10px; background: var(--panel-3); color: var(--text-2); text-decoration: none; white-space: nowrap; }
+a.port-chip { background: var(--accent-soft); color: var(--accent-2); }
+a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
+.port-chip .svc { font-family: Inter, system-ui, sans-serif; font-weight: 500; opacity: 0.8; }
+
+/* Avancement du scan */
+.scan-run { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); }
+.scan-run .perf-bar { width: 160px; }
+
+/* Fiche (panneau de droite) */
+.host-head { display: flex; align-items: center; gap: 10px; padding: 16px 14px 12px; border-bottom: 1px solid var(--line); }
+.host-ico { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--panel-3); color: var(--accent-2); flex: none; }
+.host-head b { display: block; font-size: 14px; }
+.host-head .ip { font-size: 12px; color: var(--text-3); }
+.panel .prop-row input, .panel .prop-row .dd-btn { flex: 1; }
+.prop-row .prop-label { min-width: 92px; }
+.prop-val { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.svc-row { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 12px; }
+.svc-row .port-chip { min-width: 52px; justify-content: center; }
+.svc-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.panel textarea { min-height: 64px; font-size: 12px; }
+
+/* Façade de switch (comme une image : sombre dans les deux thèmes) */
+.sw-face { display: flex; align-items: center; gap: 22px; padding: 16px 18px; border-radius: 10px; border: 1px solid var(--line-2); background: linear-gradient(180deg, #171a26, #10121a); overflow-x: auto; }
+.sw-block { display: grid; grid-template-rows: repeat(2, 26px); grid-auto-flow: column; gap: 5px 4px; }
+.sw-port { position: relative; width: 26px; height: 26px; border-radius: 4px; border: 1px solid var(--line-2); background: #1f2331; color: #a3a8bf; font: 600 11px var(--mono); display: grid; place-items: center; cursor: pointer; padding: 0; }
+.sw-port[style*='--vlan'] { background: color-mix(in srgb, var(--vlan) 38%, #1f2331); border-color: var(--vlan); color: #fff; }
+.sw-port.trunk { background-image: repeating-linear-gradient(135deg, transparent 0 4px, rgba(255, 255, 255, 0.16) 4px 6px); }
+.sw-port.off { opacity: 0.35; }
+.sw-port.sel { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sw-port .link { position: absolute; top: 2px; right: 2px; width: 5px; height: 5px; border-radius: 50%; background: #22c55e; }
+.sw-port.sfp { width: 38px; height: 22px; border-radius: 3px; }
+.sw-sfp { display: grid; grid-template-rows: repeat(2, 22px); grid-auto-flow: column; gap: 9px 4px; }
+.sw-meta { display: flex; flex-direction: column; gap: 4px; min-width: 120px; color: #8a90ad; font-size: var(--fs-11); }
+.sw-meta b { color: #e6e8f2; font-size: 13px; }
+.sw-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--text-2); }
+.sw-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.sw-legend .trunk-key { width: 14px; height: 10px; border-radius: 2px; border: 1px solid var(--line-2); background: repeating-linear-gradient(135deg, var(--panel-3) 0 3px, var(--line-2) 3px 5px); }
+.chip-pick { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip-pick .asr-chip { display: inline-flex; align-items: center; gap: 5px; }
+
+
+/* IP libres et plan d'adressage */
+.nav-dot.free { background: none; box-shadow: inset 0 0 0 1.5px var(--line-2); }
+.data-table tbody tr.off td { color: var(--text-2); }
+.ip-plan { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 4px; }
+.ipc { position: relative; height: 30px; border-radius: 5px; border: 1px solid var(--line); background: none; color: var(--text-3); font: 600 11px var(--mono); display: grid; place-items: center; cursor: pointer; padding: 0; }
+.ipc:hover { border-color: var(--text-3); color: var(--text); }
+.ipc.used { background: color-mix(in srgb, var(--pvw) 22%, var(--panel-2)); border-color: color-mix(in srgb, var(--pvw) 55%, transparent); color: var(--text); }
+.ipc.off { background: var(--panel-3); border-color: var(--line-2); color: var(--text-2); }
+.ipc.resv { border: 1.5px dashed var(--accent); color: var(--accent-2); }
+.ipc.gw { box-shadow: inset 0 0 0 2px var(--accent); }
+.ipc.na { opacity: 0.25; cursor: default; }
+.ipc.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sw-legend .ipc { display: inline-block; width: 14px; height: 12px; border-radius: 3px; cursor: default; }
+.ip-plan-card > header .sw-legend { font-weight: 400; }
+
+/* Multicast */
+.spark { display: block; color: var(--accent); }
+.rate { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.kind { font-size: var(--fs-11); padding: 1px 6px; border-radius: 10px; background: var(--panel-3); color: var(--text-2); white-space: nowrap; }
+.kind.video { background: var(--accent-soft); color: var(--accent-2); }
+.kind.audio { background: rgba(34, 197, 94, 0.15); color: var(--pvw); }
+.kind.ptp { background: rgba(245, 165, 36, 0.15); color: var(--warn); }
+.kind.ts { background: rgba(45, 212, 191, 0.15); color: var(--mask); }
+
+/* Topologie */
+.topo-page { height: 100%; display: grid; grid-template-columns: 320px minmax(0, 1fr); }
+.tree { padding: 8px 8px 24px; overflow: auto; }
+.tree-row { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px 0 4px; border-radius: 6px; color: var(--text-2); cursor: pointer; white-space: nowrap; }
+.tree-row:hover { background: var(--panel-2); color: var(--text); }
+.tree-row.on { background: var(--accent-soft); color: var(--text); }
+.tree-row.on svg { color: var(--accent-2); }
+.tree-row .tw { width: 14px; display: grid; place-items: center; color: var(--text-3); flex: none; }
+.tree-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tree-row .ip { font-size: var(--fs-11); color: var(--text-3); }
+.tree-kids { margin-left: 11px; padding-left: 8px; border-left: 1px solid var(--line); }
+.topo-canvas { position: relative; height: 100%; overflow: auto; background: radial-gradient(ellipse at top, #141725 0%, #0b0c12 60%); }
+:root[data-theme='light'] .topo-canvas { background: var(--bg); }
+.topo-tools { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; padding: 14px 18px; }
+.topo-board { position: relative; width: 880px; height: 640px; margin: 0 18px 40px; }
+.topo-board svg.links { position: absolute; inset: 0; overflow: visible; }
+.topo-board svg.links path { fill: none; stroke: var(--line-2); stroke-width: 1.5; }
+.topo-board svg.links path.trunk { stroke: var(--accent); stroke-width: 2; opacity: 0.7; }
+.topo-board svg.links text { fill: var(--text-3); font: 11px var(--mono); }
+.topo-node { position: absolute; width: 180px; height: 44px; display: flex; align-items: center; gap: 9px; padding: 0 10px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px; cursor: pointer; transition: border-color 0.12s; }
+.topo-node:hover { border-color: var(--text-3); }
+.topo-node.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.topo-node > svg { color: var(--accent-2); flex: none; }
+.topo-node div { min-width: 0; display: flex; flex-direction: column; }
+.topo-node b { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-node small { font: 11px var(--mono); color: var(--text-3); }
+.topo-node .nav-dot { position: absolute; top: 7px; right: 7px; }
+.topo-node.leaf { width: 160px; height: 38px; }
+.topo-node.leaf b { font-size: 12px; font-weight: 500; }
+
+/* VLAN : couleur */
+.color-pick { display: flex; gap: 6px; flex-wrap: wrap; }
+.color-pick button { width: 24px; height: 24px; border-radius: 6px; border: 2px solid transparent; background: var(--vlan); cursor: pointer; padding: 0; }
+.color-pick button.on { border-color: var(--text); }
+</style>
+</head>
+<body>
+<div id="root"><div class="app">
+
+<!-- ═══════════ Barre du haut ═══════════ -->
+<nav class="topbar">
+  <div class="brand"><span class="brand-lockup">
+    <svg class="brand-f-lead" viewBox="93.8 -0.2 52.3 52.95" width="23.7" height="24" aria-hidden="true"><path fill="currentColor" d="__F__"/></svg>
+    <span class="brand-name">Strata</span><span class="brand-module">Network</span>
+  </span></div>
+  <div class="tabs home-tabs">
+    <button data-go="scan" class="on"><i data-i="radar" data-s="14"></i> <span class="tab-label">Scan</span></button>
+    <button data-go="vlan"><i data-i="layers" data-s="14"></i> <span class="tab-label">VLAN</span></button>
+    <button data-go="switch"><i data-i="ethernet-port" data-s="14"></i> <span class="tab-label">Switchs</span></button>
+    <button data-go="mcast"><i data-i="radio" data-s="14"></i> <span class="tab-label">Multicast</span></button>
+    <button data-go="topo"><i data-i="list-tree" data-s="14"></i> <span class="tab-label">Topologie</span></button>
+    <button><i data-i="server" data-s="14"></i> <span class="tab-label">Système</span></button>
+  </div>
+  <div class="spacer"></div>
+  <span class="ux1-pill" title="Strata Network · Connecté"><span class="ux1-dot"></span>Connecté</span>
+  <button class="learn-help" title="Aide"><i data-i="circle-help" data-s="17"></i></button>
+  <div class="ux1-user">
+    <button class="ux1-user-btn named" id="userBtn"><span class="avatar">D</span><span class="user-name">Damien</span><i data-i="chevron-down" data-s="13"></i></button>
+    <div class="menu ux1-umenu" id="userMenu" hidden>
+      <div class="ux1-who"><span class="avatar">D</span><div><b>Damien</b><small>Administrateur</small></div></div>
+      <div class="menu-sep"></div>
+      <div class="ux1-mrow"><i data-i="languages" data-s="14"></i> Langue<div class="lang-switch"><button>EN</button><button class="on">FR</button></div></div>
+      <div class="ux1-mrow"><i data-i="sun-moon" data-s="14"></i> Thème<div class="lang-switch theme-switch"><button data-theme-set="dark" class="on">Sombre</button><button data-theme-set="light">Clair</button><button data-theme-set="system">Système</button></div></div>
+      <button class="ux1-mi"><i data-i="keyboard" data-s="14"></i> Raccourcis clavier <span class="ux1-cap">?</span></button>
+      <div class="menu-sep"></div>
+      <button class="ux1-mi danger"><i data-i="log-out" data-s="14"></i> Se déconnecter</button>
+    </div>
+  </div>
+</nav>
+
+<div class="content">
+
+<!-- ═══════════ 1. SCAN ═══════════ -->
+<section class="view on" data-view="scan">
+<div class="net-page">
+  <aside class="lib-nav">
+    <div class="lib-nav-section"><span class="grow" style="flex:1">Réseaux</span><button class="icon-btn ghost" title="Nouveau réseau" style="width:22px;height:22px"><i data-i="plus" data-s="13"></i></button></div>
+    <div class="lib-nav-item on"><i data-i="network" data-s="15"></i><span class="grow">LAN Régie</span><span class="nav-dot ok"></span><span class="count">87</span></div>
+    <div class="lib-nav-item"><i data-i="network" data-s="15"></i><span class="grow">Vidéo ST 2110</span><span class="nav-dot ok"></span><span class="count">212</span></div>
+    <div class="lib-nav-item"><i data-i="network" data-s="15"></i><span class="grow">Audio Dante</span><span class="count">46</span></div>
+    <div class="lib-nav-item"><i data-i="network" data-s="15"></i><span class="grow">Bureautique</span><span class="count">64</span></div>
+    <div class="lib-nav-item"><i data-i="network" data-s="15"></i><span class="grow">Management</span><span class="count">31</span></div>
+  </aside>
+
+  <main class="library">
+    <div class="library-inner wide">
+      <div class="settings-head">
+        <div><h1>LAN Régie</h1><p class="muted"><span class="mono">10.10.0.0/24</span> · passerelle <span class="mono">10.10.0.1</span> · 87 utilisées · 164 libres</p></div>
+        <div class="spacer"></div>
+        <div class="scan-run"><i data-i="loader-circle" data-s="14" data-c="spin"></i> 158 / 254<span class="perf-bar"><span class="perf-bar-track"><span class="perf-bar-fill" style="transform: translateX(-38%)"></span></span></span></div>
+        <button class="btn"><i data-i="square" data-s="14"></i> Arrêter</button>
+      </div>
+
+      <div class="media-toolbar">
+        <label class="search"><i data-i="search" data-s="14"></i><input placeholder="Rechercher une IP, un nom, une MAC" /></label>
+        <div class="asr-chips">
+          <button class="asr-chip on">Toutes <span class="asr-chip-n">254</span></button>
+          <button class="asr-chip">Utilisées <span class="asr-chip-n">87</span></button>
+          <button class="asr-chip">Libres <span class="asr-chip-n">164</span></button>
+          <button class="asr-chip">Hors ligne <span class="asr-chip-n">3</span></button>
+          <button class="asr-chip">Web <span class="asr-chip-n">23</span></button>
+          <button class="asr-chip">Nouvelles <span class="asr-chip-n">2</span></button>
+        </div>
+        <div class="spacer"></div>
+        <div class="segmented" id="ipView"><button class="on" data-v="list" title="Liste"><i data-i="list" data-s="14"></i></button><button data-v="plan" title="Plan d’adressage"><i data-i="layout-grid" data-s="14"></i></button></div>
+      </div>
+
+      <div class="set-card ip-plan-card" id="ipPlan" hidden>
+        <header><i data-i="layout-grid" data-s="16"></i><h2>Plan d’adressage</h2><div class="spacer"></div>
+          <div class="sw-legend"><span><span class="ipc used"></span>Utilisée · 87</span><span><span class="ipc off"></span>Hors ligne · 3</span><span><span class="ipc resv"></span>Réservée · 6</span><span><span class="ipc"></span>Libre · 158</span></div>
+        </header>
+        <div class="set-body"><div class="ip-plan" id="ipPlanGrid"></div></div>
+      </div>
+
+      <div class="card-table" id="ipList">
+      <table class="data-table">
+        <thead><tr><th></th><th>IP</th><th>Nom DNS</th><th>Libellé</th><th>MAC</th><th>Constructeur</th><th>Ports ouverts</th><th class="num">Latence</th><th>Vu</th></tr></thead>
+        <tbody>
+          <tr><td><span class="nav-dot ok"></span></td><td class="ip">10.10.0.1</td><td>gw.regie.lan</td><td>Passerelle</td><td class="ip">00:1A:2B:3C:4D:01</td><td>Fortinet</td><td><div class="ports"><a class="port-chip" href="#">443 <span class="svc">https</span> <i data-i="external-link" data-s="11"></i></a><span class="port-chip">22 <span class="svc">ssh</span></span></div></td><td class="num ip">0,4 ms</td><td>à l’instant</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.2</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.3</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.4</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.5</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.6</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.7</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.8</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.9</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr><td><span class="nav-dot ok"></span></td><td class="ip">10.10.0.10</td><td>sw-regie-01.lan</td><td>SW-Régie-01</td><td class="ip">70:7D:B9:12:44:10</td><td>Cisco</td><td><div class="ports"><a class="port-chip" href="#">443 <span class="svc">https</span> <i data-i="external-link" data-s="11"></i></a><span class="port-chip">22 <span class="svc">ssh</span></span></div></td><td class="num ip">0,6 ms</td><td>à l’instant</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.11</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.12</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.13</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.14</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.15</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.16</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.17</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.18</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.19</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.20</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.21</td><td>—</td><td class="lbl-empty">Réservée · PTZ 1 (retour SAV)</td><td></td><td></td><td></td><td class="num"></td><td>il y a 41 j</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.22</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="sel"><td><span class="nav-dot ok"></span></td><td class="ip">10.10.0.23</td><td>ptz-03.regie.lan</td><td><input class="cell-edit" value="Caméra PTZ 3" /></td><td class="ip">00:1B:21:3A:4F:92</td><td>Panasonic</td><td><div class="ports"><a class="port-chip" href="#">80 <span class="svc">http</span> <i data-i="external-link" data-s="11"></i></a><span class="port-chip">554 <span class="svc">rtsp</span></span></div></td><td class="num ip">1,1 ms</td><td>à l’instant</td></tr>
+          <tr><td><span class="nav-dot ok"></span></td><td class="ip">10.10.0.24</td><td>ptz-04.regie.lan</td><td>Caméra PTZ 4</td><td class="ip">00:1B:21:3A:4F:A0</td><td>Panasonic</td><td><div class="ports"><a class="port-chip" href="#">80 <span class="svc">http</span> <i data-i="external-link" data-s="11"></i></a><span class="port-chip">554 <span class="svc">rtsp</span></span></div></td><td class="num ip">1,0 ms</td><td>à l’instant</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.25</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.26</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.27</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.28</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.29</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr><td><span class="nav-dot ok"></span></td><td class="ip">10.10.0.30</td><td>atem-1.regie.lan</td><td>Mélangeur</td><td class="ip">7C:2E:0D:11:90:3A</td><td>Blackmagic Design</td><td><div class="ports"><span class="port-chip">9910 <span class="svc">atem</span></span></div></td><td class="num ip">0,8 ms</td><td>à l’instant</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.31</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.32</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.33</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.34</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.35</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.36</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.37</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.38</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.39</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.40</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr><td><span class="nav-dot ok"></span></td><td class="ip">10.10.0.41</td><td>—</td><td class="lbl-empty">Ajouter un libellé</td><td class="ip">00:0E:C6:88:12:7B</td><td>Riedel</td><td><div class="ports"><a class="port-chip" href="#">8080 <span class="svc">http</span> <i data-i="external-link" data-s="11"></i></a></div></td><td class="num ip">2,3 ms</td><td>à l’instant</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.42</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.43</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.44</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.45</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.46</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.47</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.48</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.49</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.50</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.51</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.52</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.53</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.54</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.55</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.56</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.57</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.58</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.59</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.60</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.61</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.62</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.63</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.64</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.65</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.66</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.67</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.68</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.69</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.70</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.71</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.72</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.73</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.74</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.75</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.76</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr><td><span class="nav-dot warn" title="Nouvelle machine"></span></td><td class="ip">10.10.0.77</td><td>desktop-k3l9.lan</td><td class="lbl-empty">Ajouter un libellé</td><td class="ip">3C:52:82:5A:00:E1</td><td>HP</td><td><div class="ports"><span class="port-chip">445 <span class="svc">smb</span></span><span class="port-chip">3389 <span class="svc">rdp</span></span></div></td><td class="num ip">3,8 ms</td><td>à l’instant</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.78</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.79</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.80</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.81</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.82</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.83</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.84</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.85</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.86</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.87</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.88</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.89</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.90</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.91</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.92</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.93</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.94</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.95</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.96</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.97</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.98</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.99</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.100</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.101</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.102</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.103</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.104</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.105</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.106</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.107</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.108</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.109</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.110</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.111</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.112</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.113</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.114</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.115</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.116</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.117</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.118</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.119</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr><td><span class="nav-dot ok"></span></td><td class="ip">10.10.0.120</td><td>vmix-01.regie.lan</td><td>vMix Prod</td><td class="ip">B4:2E:99:0F:61:22</td><td>Dell</td><td><div class="ports"><a class="port-chip" href="#">8088 <span class="svc">http</span> <i data-i="external-link" data-s="11"></i></a><span class="port-chip">3389 <span class="svc">rdp</span></span><span class="port-chip">5960 <span class="svc">ndi</span></span></div></td><td class="num ip">0,9 ms</td><td>il y a 2 min</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.121</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.122</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.123</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.124</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.125</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.126</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.127</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.128</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.129</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.130</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.131</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.132</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.133</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.134</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.135</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.136</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.137</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.138</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.139</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.140</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.141</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.142</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.143</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.144</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.145</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.146</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.147</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.148</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.149</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.150</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.151</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.152</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.153</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.154</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.155</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.156</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.157</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.158</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.159</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.160</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.161</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.162</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.163</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.164</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.165</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.166</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.167</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.168</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.169</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.170</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.171</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.172</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.173</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.174</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.175</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.176</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.177</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.178</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.179</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.180</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.181</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.182</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.183</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.184</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.185</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.186</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.187</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.188</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.189</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.190</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.191</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.192</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.193</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.194</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.195</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.196</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.197</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.198</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.199</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr><td><span class="nav-dot ok"></span></td><td class="ip">10.10.0.200</td><td>nas-prod.regie.lan</td><td>NAS Prod</td><td class="ip">00:11:32:AB:CD:EF</td><td>Synology</td><td><div class="ports"><a class="port-chip" href="#">5001 <span class="svc">https</span> <i data-i="external-link" data-s="11"></i></a><span class="port-chip">445 <span class="svc">smb</span></span><span class="port-chip">22 <span class="svc">ssh</span></span></div></td><td class="num ip">0,7 ms</td><td>il y a 2 min</td></tr>
+          <tr class="off"><td><span class="nav-dot"></span></td><td class="ip">10.10.0.201</td><td>nas-backup.regie.lan</td><td>NAS Sauvegarde</td><td class="ip">00:11:32:AB:CE:01</td><td>Synology</td><td><div class="ports"></div></td><td class="num ip">—</td><td>il y a 3 j</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.202</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.203</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.204</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.205</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.206</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.207</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.208</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.209</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.210</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.211</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.212</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.213</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.214</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.215</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.216</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.217</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.218</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.219</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.220</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.221</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.222</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.223</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.224</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.225</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.226</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.227</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.228</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.229</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.230</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.231</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.232</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.233</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.234</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.235</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.236</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.237</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.238</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.239</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.240</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.241</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.242</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.243</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.244</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.245</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.246</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.247</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.248</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.249</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.250</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.251</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.252</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.253</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+          <tr class="free"><td><span class="nav-dot free"></span></td><td class="ip">10.10.0.254</td><td>—</td><td class="lbl-empty">Libre</td><td></td><td></td><td></td><td class="num"></td><td>jamais</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </main>
+
+  <aside class="panel right">
+    <div class="host-head">
+      <span class="host-ico"><i data-i="cctv" data-s="18"></i></span>
+      <div style="flex:1;min-width:0"><b>Caméra PTZ 3</b><span class="ip">10.10.0.23 · ptz-03.regie.lan</span></div>
+      <button class="icon-btn ghost" title="Scanner cette machine"><i data-i="refresh-cw" data-s="14"></i></button>
+      <button class="icon-btn ghost" title="Fermer"><i data-i="x" data-s="14"></i></button>
+    </div>
+    <section class="insp-section"><header><span>Machine</span></header><div class="insp-body">
+      <div class="prop-row"><span class="prop-label">Libellé</span><input value="Caméra PTZ 3" /></div>
+      <div class="prop-row"><span class="prop-label">Type</span><button class="dd-btn"><span class="dd-icon"><i data-i="cctv" data-s="12"></i></span><span class="dd-label">Caméra</span><i data-i="chevron-down" data-s="12"></i></button></div>
+      <div class="prop-row"><span class="prop-label">MAC</span><span class="prop-val ip">00:1B:21:3A:4F:92</span></div>
+      <div class="prop-row"><span class="prop-label">Constructeur</span><span class="prop-val">Panasonic</span></div>
+      <div class="prop-row"><span class="prop-label">Vue depuis</span><span class="prop-val">12 oct. 2026</span></div>
+    </div></section>
+    <section class="insp-section"><header><span>Ports ouverts</span></header><div class="insp-body">
+      <div class="svc-row"><a class="port-chip" href="#">80 <i data-i="external-link" data-s="11"></i></a><span class="grow">http · « AW-UE150 Web Setting »</span></div>
+      <div class="svc-row"><span class="port-chip">554</span><span class="grow">rtsp</span></div>
+    </div></section>
+    <section class="insp-section"><header><span>Raccordement</span></header><div class="insp-body">
+      <div class="prop-row"><span class="prop-label">Switch</span><button class="dd-btn"><span class="dd-label">SW-Régie-01</span><i data-i="chevron-down" data-s="12"></i></button></div>
+      <div class="prop-row"><span class="prop-label">Port</span><button class="dd-btn"><span class="dd-label">Gi1/0/12</span><i data-i="chevron-down" data-s="12"></i></button></div>
+      <div class="prop-row"><span class="prop-label">VLAN</span><span class="vlan-tag" style="--vlan:#8fa3ff"><span class="vlan-sw"></span><b>20</b> Caméras</span></div>
+    </div></section>
+    <section class="insp-section"><header><span>Notes</span></header><div class="insp-body">
+      <textarea>Plateau B, côté jardin</textarea>
+    </div></section>
+  </aside>
+</div>
+</section>
+
+<!-- ═══════════ 2. VLAN ═══════════ -->
+<section class="view" data-view="vlan">
+<main class="library">
+  <div class="library-inner">
+    <div class="settings-head">
+      <div><h1>VLAN</h1><p class="muted">8 VLAN</p></div>
+      <div class="spacer"></div>
+      <button class="btn primary" data-open="vlanModal"><i data-i="plus" data-s="14"></i> Nouveau VLAN</button>
+    </div>
+    <div class="media-toolbar"><label class="search"><i data-i="search" data-s="14"></i><input placeholder="Rechercher des VLAN" /></label></div>
+    <table class="user-table">
+      <thead><tr><th>ID</th><th>Nom</th><th>Sous-réseau</th><th>Passerelle</th><th>Ports</th><th>Machines</th><th></th></tr></thead>
+      <tbody>
+        <tr><td><span class="vlan-tag" style="--vlan:#a3a8bf"><span class="vlan-sw"></span><b>1</b></span></td><td>Défaut</td><td class="ip">—</td><td class="ip">—</td><td>6</td><td>—</td><td style="text-align:right"><button class="icon-btn ghost" title="Modifier"><i data-i="pencil" data-s="14"></i></button><button class="icon-btn ghost" title="Supprimer"><i data-i="trash-2" data-s="14"></i></button></td></tr>
+        <tr><td><span class="vlan-tag" style="--vlan:#22c55e"><span class="vlan-sw"></span><b>10</b></span></td><td>Régie</td><td class="ip">10.10.0.0/24</td><td class="ip">10.10.0.1</td><td>38</td><td>87</td><td style="text-align:right"><button class="icon-btn ghost" title="Modifier"><i data-i="pencil" data-s="14"></i></button><button class="icon-btn ghost" title="Supprimer"><i data-i="trash-2" data-s="14"></i></button></td></tr>
+        <tr><td><span class="vlan-tag" style="--vlan:#8fa3ff"><span class="vlan-sw"></span><b>20</b></span></td><td>Caméras</td><td class="ip">10.10.20.0/24</td><td class="ip">10.10.20.1</td><td>12</td><td>12</td><td style="text-align:right"><button class="icon-btn ghost" title="Modifier"><i data-i="pencil" data-s="14"></i></button><button class="icon-btn ghost" title="Supprimer"><i data-i="trash-2" data-s="14"></i></button></td></tr>
+        <tr><td><span class="vlan-tag" style="--vlan:#2dd4bf"><span class="vlan-sw"></span><b>110</b></span></td><td>ST 2110 Rouge</td><td class="ip">10.20.0.0/22</td><td class="ip">10.20.0.1</td><td>44</td><td>212</td><td style="text-align:right"><button class="icon-btn ghost" title="Modifier"><i data-i="pencil" data-s="14"></i></button><button class="icon-btn ghost" title="Supprimer"><i data-i="trash-2" data-s="14"></i></button></td></tr>
+        <tr><td><span class="vlan-tag" style="--vlan:#e879f9"><span class="vlan-sw"></span><b>120</b></span></td><td>ST 2110 Bleu</td><td class="ip">10.21.0.0/22</td><td class="ip">10.21.0.1</td><td>44</td><td>208</td><td style="text-align:right"><button class="icon-btn ghost" title="Modifier"><i data-i="pencil" data-s="14"></i></button><button class="icon-btn ghost" title="Supprimer"><i data-i="trash-2" data-s="14"></i></button></td></tr>
+        <tr><td><span class="vlan-tag" style="--vlan:#f5c542"><span class="vlan-sw"></span><b>30</b></span></td><td>Audio Dante</td><td class="ip">10.30.0.0/24</td><td class="ip">10.30.0.1</td><td>16</td><td>46</td><td style="text-align:right"><button class="icon-btn ghost" title="Modifier"><i data-i="pencil" data-s="14"></i></button><button class="icon-btn ghost" title="Supprimer"><i data-i="trash-2" data-s="14"></i></button></td></tr>
+        <tr><td><span class="vlan-tag" style="--vlan:#f5a524"><span class="vlan-sw"></span><b>50</b></span></td><td>Bureautique</td><td class="ip">192.168.1.0/24</td><td class="ip">192.168.1.1</td><td>22</td><td>64</td><td style="text-align:right"><button class="icon-btn ghost" title="Modifier"><i data-i="pencil" data-s="14"></i></button><button class="icon-btn ghost" title="Supprimer"><i data-i="trash-2" data-s="14"></i></button></td></tr>
+        <tr><td><span class="vlan-tag" style="--vlan:#ff3b5c"><span class="vlan-sw"></span><b>99</b></span></td><td>Management</td><td class="ip">10.99.0.0/24</td><td class="ip">10.99.0.1</td><td>9</td><td>31</td><td style="text-align:right"><button class="icon-btn ghost" title="Modifier"><i data-i="pencil" data-s="14"></i></button><button class="icon-btn ghost" title="Supprimer"><i data-i="trash-2" data-s="14"></i></button></td></tr>
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<div class="modal-back" id="vlanModal" hidden>
+  <form class="modal wide" onsubmit="return false">
+    <header><h2>Nouveau VLAN</h2><button type="button" class="icon-btn ghost" title="Fermer" data-close><i data-i="x" data-s="16"></i></button></header>
+    <div class="set-grid two">
+      <label class="set-field"><span class="set-label">ID</span><input class="mono" value="40" /></label>
+      <label class="set-field"><span class="set-label">Nom</span><input value="Intercom" /></label>
+      <label class="set-field"><span class="set-label">Sous-réseau</span><input class="mono" value="10.40.0.0/24" /></label>
+      <label class="set-field"><span class="set-label">Passerelle</span><input class="mono" value="10.40.0.1" /></label>
+      <div class="set-field"><span class="set-label">Couleur</span><div class="color-pick">
+        <button type="button" style="--vlan:#8fa3ff"></button><button type="button" style="--vlan:#22c55e"></button><button type="button" style="--vlan:#2dd4bf"></button><button type="button" class="on" style="--vlan:#60a5fa"></button><button type="button" style="--vlan:#e879f9"></button><button type="button" style="--vlan:#f5c542"></button><button type="button" style="--vlan:#f5a524"></button><button type="button" style="--vlan:#ff3b5c"></button><button type="button" style="--vlan:#a3a8bf"></button>
+      </div></div>
+      <label class="set-field"><span class="set-label">Réseau à scanner</span><span class="check"><input type="checkbox" checked /> Créer le réseau</span></label>
+    </div>
+    <footer><button type="button" class="btn" data-close>Annuler</button><button type="submit" class="btn primary"><i data-i="plus" data-s="14"></i> Créer le VLAN</button></footer>
+  </form>
+</div>
+</section>
+
+<!-- ═══════════ 3. SWITCHS ═══════════ -->
+<section class="view" data-view="switch">
+<div class="net-page">
+  <aside class="lib-nav">
+    <div class="lib-nav-section"><span class="grow" style="flex:1">Baie Régie</span><button class="icon-btn ghost" title="Nouveau switch" style="width:22px;height:22px"><i data-i="plus" data-s="13"></i></button></div>
+    <div class="lib-nav-item"><i data-i="ethernet-port" data-s="15"></i><span class="grow">SW-Core-01</span><span class="count">32</span></div>
+    <div class="lib-nav-item on"><i data-i="ethernet-port" data-s="15"></i><span class="grow">SW-Régie-01</span><span class="count">52</span></div>
+    <div class="lib-nav-section"><span class="grow">Plateau B</span></div>
+    <div class="lib-nav-item"><i data-i="ethernet-port" data-s="15"></i><span class="grow">SW-Plateau-02</span><span class="count">28</span></div>
+    <div class="lib-nav-item"><i data-i="ethernet-port" data-s="15"></i><span class="grow">SW-Audio-01</span><span class="count">16</span></div>
+    <div class="lib-nav-section"><span class="grow">Étage 2</span></div>
+    <div class="lib-nav-item"><i data-i="ethernet-port" data-s="15"></i><span class="grow">SW-Bureaux-03</span><span class="count">52</span></div>
+  </aside>
+
+  <main class="library">
+    <div class="library-inner wide">
+      <div class="settings-head">
+        <div><h1>SW-Régie-01</h1><p class="muted">Cisco C9300-48P · <span class="mono">10.99.0.11</span> · Baie Régie, U12 · 48 + 4 ports</p></div>
+        <div class="spacer"></div>
+        <button class="btn"><i data-i="pencil" data-s="14"></i> Modifier</button>
+      </div>
+
+      <div class="sys-tabrow">
+        <div class="tabs sys-tabs" role="tablist"><button class="on" role="tab"><i data-i="layout-grid" data-s="14"></i><span>Façade</span></button><button role="tab"><i data-i="list" data-s="14"></i><span>Liste</span> <span class="sys-tab-n">52</span></button></div>
+      </div>
+
+      <div class="sw-face" id="swFace"><!-- ports générés par le script --></div>
+
+      <div class="sw-legend">
+        <span><span class="vlan-sw" style="--vlan:#22c55e"></span>10 Régie · 18</span>
+        <span><span class="vlan-sw" style="--vlan:#8fa3ff"></span>20 Caméras · 12</span>
+        <span><span class="vlan-sw" style="--vlan:#f5c542"></span>30 Audio Dante · 6</span>
+        <span><span class="vlan-sw" style="--vlan:#ff3b5c"></span>99 Management · 2</span>
+        <span><span class="trunk-key"></span>Trunk · 4</span>
+        <span><span class="vlan-sw"></span>Libre · 10</span>
+      </div>
+    </div>
+  </main>
+
+  <aside class="panel right">
+    <div class="host-head">
+      <span class="host-ico"><i data-i="ethernet-port" data-s="18"></i></span>
+      <div style="flex:1;min-width:0"><b id="portTitle">Port 12</b><span class="ip">Gi1/0/12</span></div>
+      <button class="icon-btn ghost" title="Fermer"><i data-i="x" data-s="14"></i></button>
+    </div>
+    <section class="insp-section"><header><span>Port</span></header><div class="insp-body">
+      <div class="prop-row"><span class="prop-label">Libellé</span><input value="PTZ 3 — Plateau B" /></div>
+      <div class="prop-row"><span class="prop-label">Mode</span><div class="segmented"><button class="on">Accès</button><button>Trunk</button><button>Désactivé</button></div></div>
+      <div class="prop-row"><span class="prop-label">VLAN</span><button class="dd-btn"><span class="dd-icon"><span class="vlan-sw" style="--vlan:#8fa3ff"></span></span><span class="dd-label">20 · Caméras</span><i data-i="chevron-down" data-s="12"></i></button></div>
+    </div></section>
+    <section class="insp-section"><header><span>VLAN taggués</span></header><div class="insp-body">
+      <div class="chip-pick">
+        <button class="asr-chip"><span class="vlan-sw" style="--vlan:#22c55e"></span>10</button>
+        <button class="asr-chip"><span class="vlan-sw" style="--vlan:#8fa3ff"></span>20</button>
+        <button class="asr-chip"><span class="vlan-sw" style="--vlan:#f5c542"></span>30</button>
+        <button class="asr-chip"><span class="vlan-sw" style="--vlan:#2dd4bf"></span>110</button>
+        <button class="asr-chip"><span class="vlan-sw" style="--vlan:#e879f9"></span>120</button>
+        <button class="asr-chip"><span class="vlan-sw" style="--vlan:#ff3b5c"></span>99</button>
+      </div>
+    </div></section>
+    <section class="insp-section"><header><span>Raccordé à</span></header><div class="insp-body">
+      <div class="prop-row"><span class="prop-label">Machine</span><button class="dd-btn"><span class="dd-icon"><i data-i="cctv" data-s="12"></i></span><span class="dd-label">Caméra PTZ 3</span><span class="dd-detail">10.10.0.23</span><i data-i="chevron-down" data-s="12"></i></button></div>
+      <div class="prop-row"><span class="prop-label">Prise murale</span><input value="B-14" /></div>
+    </div></section>
+  </aside>
+</div>
+</section>
+
+<!-- ═══════════ 4. MULTICAST ═══════════ -->
+<section class="view" data-view="mcast">
+<main class="library">
+  <div class="library-inner wide">
+    <div class="settings-head">
+      <div><h1>Multicast</h1><p class="muted">34 flux · <span class="mono">eth1</span> (<span class="mono">10.20.0.5</span>) · <span class="mono">239.0.0.0/8</span></p></div>
+      <div class="spacer"></div>
+      <div style="width:200px"><button class="dd-btn"><span class="dd-icon"><i data-i="ethernet-port" data-s="12"></i></span><span class="dd-label">eth1 · Vidéo ST 2110</span><i data-i="chevron-down" data-s="12"></i></button></div>
+      <button class="btn"><i data-i="sliders-horizontal" data-s="14"></i> Plages</button>
+      <button class="btn primary"><i data-i="play" data-s="14"></i> Écouter</button>
+    </div>
+    <div class="media-toolbar">
+      <label class="search"><i data-i="search" data-s="14"></i><input placeholder="Rechercher un flux" /></label>
+      <div class="asr-chips">
+        <button class="asr-chip on">Tous <span class="asr-chip-n">34</span></button>
+        <button class="asr-chip">Vidéo <span class="asr-chip-n">12</span></button>
+        <button class="asr-chip">Audio <span class="asr-chip-n">14</span></button>
+        <button class="asr-chip">MPEG-TS <span class="asr-chip-n">5</span></button>
+        <button class="asr-chip">PTP <span class="asr-chip-n">1</span></button>
+        <button class="asr-chip">Arrêtés <span class="asr-chip-n">2</span></button>
+      </div>
+    </div>
+    <div class="card-table">
+    <table class="data-table">
+      <thead><tr><th></th><th>Groupe</th><th>Nom</th><th>Source</th><th>Type</th><th>VLAN</th><th class="num">Débit</th><th class="num">Paquets/s</th><th>Vu</th></tr></thead>
+      <tbody>
+        <tr><td><span class="nav-dot ok"></span></td><td class="ip">239.10.1.1:5004</td><td>CAM-PTZ1 Vidéo</td><td><span class="ip">10.20.1.21</span> <span class="muted">ptz-01</span></td><td><span class="kind video">ST 2110-20</span></td><td><span class="vlan-tag" style="--vlan:#2dd4bf"><span class="vlan-sw"></span><b>110</b></span></td><td class="num"><div class="rate"><svg class="spark" width="64" height="16"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,9 8,8 16,9 24,7 32,8 40,8 48,9 56,8 64,8"/></svg><span class="ip">1,24 Gb/s</span></div></td><td class="num ip">112 400</td><td>en direct</td></tr>
+        <tr><td><span class="nav-dot ok"></span></td><td class="ip">239.10.1.2:5004</td><td>CAM-PTZ1 Audio</td><td><span class="ip">10.20.1.21</span> <span class="muted">ptz-01</span></td><td><span class="kind audio">ST 2110-30</span></td><td><span class="vlan-tag" style="--vlan:#2dd4bf"><span class="vlan-sw"></span><b>110</b></span></td><td class="num"><div class="rate"><svg class="spark" width="64" height="16"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,8 8,8 16,8 24,8 32,8 40,8 48,8 56,8 64,8"/></svg><span class="ip">2,4 Mb/s</span></div></td><td class="num ip">1 000</td><td>en direct</td></tr>
+        <tr><td><span class="nav-dot ok"></span></td><td class="ip">239.10.2.1:5004</td><td>CAM-PTZ2 Vidéo</td><td><span class="ip">10.20.1.22</span> <span class="muted">ptz-02</span></td><td><span class="kind video">ST 2110-20</span></td><td><span class="vlan-tag" style="--vlan:#2dd4bf"><span class="vlan-sw"></span><b>110</b></span></td><td class="num"><div class="rate"><svg class="spark" width="64" height="16"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,8 8,9 16,8 24,8 32,7 40,8 48,8 56,9 64,8"/></svg><span class="ip">1,24 Gb/s</span></div></td><td class="num ip">112 380</td><td>en direct</td></tr>
+        <tr><td><span class="nav-dot ok"></span></td><td class="ip">239.69.4.10:5004</td><td>Console Studio A · 1-8</td><td><span class="ip">10.30.0.8</span> <span class="muted">sd7-studio-a</span></td><td><span class="kind audio">AES67</span></td><td><span class="vlan-tag" style="--vlan:#f5c542"><span class="vlan-sw"></span><b>30</b></span></td><td class="num"><div class="rate"><svg class="spark" width="64" height="16"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,8 8,8 16,8 24,8 32,8 40,8 48,8 56,8 64,8"/></svg><span class="ip">9,2 Mb/s</span></div></td><td class="num ip">1 000</td><td>en direct</td></tr>
+        <tr><td><span class="nav-dot ok"></span></td><td class="ip">239.1.1.10:1234</td><td>Antenne TNT</td><td><span class="ip">10.20.0.15</span> <span class="muted">enc-srt-01</span></td><td><span class="kind ts">MPEG-TS</span></td><td><span class="vlan-tag" style="--vlan:#2dd4bf"><span class="vlan-sw"></span><b>110</b></span></td><td class="num"><div class="rate"><svg class="spark" width="64" height="16"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,10 8,6 16,9 24,4 32,11 40,7 48,5 56,10 64,8"/></svg><span class="ip">8,1 Mb/s</span></div></td><td class="num ip">770</td><td>en direct</td></tr>
+        <tr><td><span class="nav-dot ok"></span></td><td class="ip">224.0.1.129:319</td><td>PTP · grand maître</td><td><span class="ip">10.20.0.2</span> <span class="muted">gm-meinberg</span></td><td><span class="kind ptp">PTP</span></td><td><span class="vlan-tag" style="--vlan:#2dd4bf"><span class="vlan-sw"></span><b>110</b></span></td><td class="num"><div class="rate"><svg class="spark" width="64" height="16"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="0,8 8,8 16,8 24,8 32,8 40,8 48,8 56,8 64,8"/></svg><span class="ip">12 kb/s</span></div></td><td class="num ip">16</td><td>en direct</td></tr>
+        <tr class="free"><td><span class="nav-dot"></span></td><td class="ip">239.1.1.11:1234</td><td>Antenne Radio</td><td><span class="ip">10.20.0.16</span></td><td><span class="kind ts">MPEG-TS</span></td><td><span class="vlan-tag" style="--vlan:#2dd4bf"><span class="vlan-sw"></span><b>110</b></span></td><td class="num ip">—</td><td class="num ip">—</td><td>il y a 14 min</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</main>
+</section>
+
+<!-- ═══════════ 5. TOPOLOGIE ═══════════ -->
+<section class="view" data-view="topo">
+<div class="topo-page">
+  <aside class="panel left">
+    <div class="lib-nav-section" style="padding:18px 18px 6px"><span class="grow" style="flex:1">Arborescence</span></div>
+    <div class="tree">
+      <div class="tree-row"><span class="tw"><i data-i="chevron-down" data-s="12"></i></span><i data-i="globe" data-s="15"></i><span class="name">Internet</span></div>
+      <div class="tree-kids">
+        <div class="tree-row"><span class="tw"><i data-i="chevron-down" data-s="12"></i></span><i data-i="shield" data-s="15"></i><span class="name">FW-01</span><span class="ip">10.99.0.1</span></div>
+        <div class="tree-kids">
+          <div class="tree-row"><span class="tw"><i data-i="chevron-down" data-s="12"></i></span><i data-i="network" data-s="15"></i><span class="name">SW-Core-01</span><span class="ip">10.99.0.10</span></div>
+          <div class="tree-kids">
+            <div class="tree-row on"><span class="tw"><i data-i="chevron-down" data-s="12"></i></span><i data-i="ethernet-port" data-s="15"></i><span class="name">SW-Régie-01</span><span class="ip">10.99.0.11</span></div>
+            <div class="tree-kids">
+              <div class="tree-row"><span class="tw"></span><i data-i="cctv" data-s="15"></i><span class="name">Caméra PTZ 1</span><span class="ip">10.10.0.21</span></div>
+              <div class="tree-row"><span class="tw"></span><i data-i="cctv" data-s="15"></i><span class="name">Caméra PTZ 3</span><span class="ip">10.10.0.23</span></div>
+              <div class="tree-row"><span class="tw"></span><i data-i="monitor" data-s="15"></i><span class="name">Mélangeur</span><span class="ip">10.10.0.30</span></div>
+              <div class="tree-row"><span class="tw"></span><i data-i="server" data-s="15"></i><span class="name">vMix Prod</span><span class="ip">10.10.0.120</span></div>
+            </div>
+            <div class="tree-row"><span class="tw"><i data-i="chevron-right" data-s="12"></i></span><i data-i="ethernet-port" data-s="15"></i><span class="name">SW-Plateau-02</span><span class="ip">10.99.0.12</span></div>
+            <div class="tree-row"><span class="tw"><i data-i="chevron-right" data-s="12"></i></span><i data-i="ethernet-port" data-s="15"></i><span class="name">SW-Bureaux-03</span><span class="ip">10.99.0.13</span></div>
+            <div class="tree-row"><span class="tw"></span><i data-i="hard-drive" data-s="15"></i><span class="name">NAS Prod</span><span class="ip">10.10.0.200</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="topo-canvas">
+    <div class="topo-tools">
+      <div class="segmented"><button class="on">Schéma</button><button>Par VLAN</button></div>
+      <div class="spacer"></div>
+      <button class="icon-btn" title="Ajuster à la fenêtre"><i data-i="scan" data-s="14"></i></button>
+      <button class="btn"><i data-i="download" data-s="14"></i> Exporter</button>
+    </div>
+    <div class="topo-board">
+      <svg class="links" width="880" height="640">
+        <path d="M425 60 V96" /><path class="trunk" d="M425 140 V176" />
+        <path class="trunk" d="M425 220 V248 H110 V276" /><path class="trunk" d="M425 248 H320 V276" /><path class="trunk" d="M425 248 H530 V276" /><path d="M425 248 H740 V276" />
+        <text x="431" y="168">port1</text><text x="116" y="270">Te1/0/1</text><text x="326" y="270">Te1/0/2</text><text x="536" y="270">Te1/0/3</text><text x="746" y="270">Gi1/0/24</text>
+        <path d="M30 320 V547 M30 361 H40 M30 407 H40 M30 453 H40 M30 499 H40 M30 545 H40" />
+        <path d="M240 320 V407 M240 361 H250 M240 407 H250" />
+        <path d="M450 320 V407 M450 361 H460 M450 407 H460" />
+      </svg>
+      <div class="topo-node" style="left:335px;top:16px"><i data-i="globe" data-s="16"></i><div><b>Internet</b><small>fibre 1 Gb/s</small></div></div>
+      <div class="topo-node" style="left:335px;top:96px"><i data-i="shield" data-s="16"></i><div><b>FW-01</b><small>10.99.0.1</small></div><span class="nav-dot ok"></span></div>
+      <div class="topo-node" style="left:335px;top:176px"><i data-i="network" data-s="16"></i><div><b>SW-Core-01</b><small>10.99.0.10</small></div><span class="nav-dot ok"></span></div>
+      <div class="topo-node on" style="left:20px;top:276px"><i data-i="ethernet-port" data-s="16"></i><div><b>SW-Régie-01</b><small>10.99.0.11</small></div><span class="nav-dot ok"></span></div>
+      <div class="topo-node" style="left:230px;top:276px"><i data-i="ethernet-port" data-s="16"></i><div><b>SW-Plateau-02</b><small>10.99.0.12</small></div><span class="nav-dot ok"></span></div>
+      <div class="topo-node" style="left:440px;top:276px"><i data-i="ethernet-port" data-s="16"></i><div><b>SW-Bureaux-03</b><small>10.99.0.13</small></div><span class="nav-dot ok"></span></div>
+      <div class="topo-node" style="left:650px;top:276px"><i data-i="hard-drive" data-s="16"></i><div><b>NAS Prod</b><small>10.10.0.200</small></div><span class="nav-dot ok"></span></div>
+      <div class="topo-node leaf" style="left:40px;top:342px"><i data-i="cctv" data-s="15"></i><div><b>Caméra PTZ 1</b><small>10.10.0.21</small></div></div>
+      <div class="topo-node leaf" style="left:40px;top:388px"><i data-i="cctv" data-s="15"></i><div><b>Caméra PTZ 3</b><small>10.10.0.23</small></div></div>
+      <div class="topo-node leaf" style="left:40px;top:434px"><i data-i="monitor" data-s="15"></i><div><b>Mélangeur</b><small>10.10.0.30</small></div></div>
+      <div class="topo-node leaf" style="left:40px;top:480px"><i data-i="server" data-s="15"></i><div><b>vMix Prod</b><small>10.10.0.120</small></div></div>
+      <div class="topo-node leaf" style="left:40px;top:526px"><i data-i="ellipsis" data-s="15"></i><div><b>14 autres</b><small>VLAN 10, 20</small></div></div>
+      <div class="topo-node leaf" style="left:250px;top:342px"><i data-i="server" data-s="15"></i><div><b>Encodeur SRT-01</b><small>10.20.0.15</small></div></div>
+      <div class="topo-node leaf" style="left:250px;top:388px"><i data-i="audio-lines" data-s="15"></i><div><b>Console Studio A</b><small>10.30.0.8</small></div></div>
+      <div class="topo-node leaf" style="left:460px;top:342px"><i data-i="printer" data-s="15"></i><div><b>Imprimante RDC</b><small>192.168.1.20</small></div></div>
+      <div class="topo-node leaf" style="left:460px;top:388px"><i data-i="wifi" data-s="15"></i><div><b>Borne Wi-Fi</b><small>192.168.1.5</small></div></div>
+    </div>
+  </div>
+</div>
+</section>
+
+</div></div></div>
+
+<script>
+// Maquette : navigation entre les écrans, menu utilisateur, thème, modale, façade du switch.
+document.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-go]').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.view').forEach((v) => v.classList.toggle('on', v.dataset.view === b.dataset.go));
+}));
+const um = document.getElementById('userMenu');
+document.getElementById('userBtn').addEventListener('click', (e) => { e.stopPropagation(); um.hidden = !um.hidden; });
+document.addEventListener('click', (e) => { if (!um.contains(e.target)) um.hidden = true; });
+document.querySelectorAll('[data-theme-set]').forEach((b) => b.addEventListener('click', () => {
+  const v = b.dataset.themeSet;
+  const light = v === 'light' || (v === 'system' && matchMedia('(prefers-color-scheme: light)').matches);
+  if (light) document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
+  document.querySelectorAll('[data-theme-set]').forEach((x) => x.classList.toggle('on', x === b));
+}));
+document.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => { document.getElementById(b.dataset.open).hidden = false; }));
+document.querySelectorAll('.modal-back').forEach((m) => {
+  m.addEventListener('pointerdown', (e) => { if (e.target === m) m.hidden = true; });
+  m.querySelectorAll('[data-close]').forEach((c) => c.addEventListener('click', () => { m.hidden = true; }));
+});
+
+// Plan d'adressage du /24 : 16 × 16.
+const used = new Set([1,10,23,24,30,41,77,120,200, ...Array.from({length:78},(_,i)=>i<20?150+i:i<40?100+i:i<60?205+i-40:i<78?160+i:0)].filter((n)=>n>0&&n<255));
+const off = new Set([201, 88, 91]), resv = new Set([21, 2, 3, 4, 5, 250]);
+const grid = document.getElementById('ipPlanGrid');
+for (let n = 0; n < 256; n++) {
+  const c = document.createElement('button');
+  c.className = 'ipc' + (n === 0 || n === 255 ? ' na' : off.has(n) ? ' off' : used.has(n) ? ' used' : resv.has(n) ? ' resv' : '') + (n === 1 ? ' gw' : '') + (n === 23 ? ' sel' : '');
+  c.textContent = n; c.title = '10.10.0.' + n + (n === 0 ? ' · réseau' : n === 255 ? ' · diffusion' : off.has(n) ? ' · hors ligne' : used.has(n) ? ' · utilisée' : resv.has(n) ? ' · réservée' : ' · libre');
+  grid.appendChild(c);
+}
+document.querySelectorAll('#ipView button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('#ipView button').forEach((x) => x.classList.toggle('on', x === b));
+  document.getElementById('ipPlan').hidden = b.dataset.v !== 'plan';
+  document.getElementById('ipList').hidden = b.dataset.v === 'plan';
+}));
+// Façade : 48 ports cuivre en 4 blocs de 12 (impairs en haut), puis 4 SFP.
+const V = { 10: '#22c55e', 20: '#8fa3ff', 30: '#f5c542', 99: '#ff3b5c' };
+const plan = { 1: 20, 2: 20, 3: 20, 4: 20, 5: 10, 6: 10, 7: 10, 8: 10, 9: 20, 10: 20, 11: 20, 12: 20, 13: 10, 14: 10, 15: 10, 16: 10, 17: 10, 18: 10, 19: 30, 20: 30, 21: 30, 22: 30, 23: 30, 24: 30, 25: 10, 26: 10, 27: 10, 28: 10, 29: 20, 30: 20, 31: 20, 32: 20, 33: 10, 34: 10, 35: 10, 36: 10, 37: 10, 38: 10, 47: 99, 48: 99 };
+const up = new Set([1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 19, 20, 21, 25, 26, 29, 30, 47, 48, 49, 50]);
+const face = document.getElementById('swFace');
+const pick = (el, n) => { face.querySelectorAll('.sw-port').forEach((p) => p.classList.toggle('sel', p === el)); document.getElementById('portTitle').textContent = 'Port ' + n; };
+for (let b = 0; b < 4; b++) {
+  const blk = document.createElement('div'); blk.className = 'sw-block';
+  for (let i = 0; i < 12; i++) {
+    const n = b * 12 + i + 1, el = document.createElement('button');
+    el.className = 'sw-port' + (n === 12 ? ' sel' : '') + (n > 38 && n < 47 ? ' off' : '');
+    if (plan[n]) el.style.setProperty('--vlan', V[plan[n]]);
+    el.title = 'Port ' + n + (plan[n] ? ' · VLAN ' + plan[n] : ' · libre');
+    el.innerHTML = n + (up.has(n) ? '<span class="link"></span>' : '');
+    el.onclick = () => pick(el, n); blk.appendChild(el);
+  }
+  face.appendChild(blk);
+}
+const sfp = document.createElement('div'); sfp.className = 'sw-sfp';
+for (let n = 49; n <= 52; n++) {
+  const el = document.createElement('button'); el.className = 'sw-port sfp' + (n <= 51 ? ' trunk' : '');
+  if (n <= 51) el.style.setProperty('--vlan', '#ff3b5c');
+  el.title = 'Te1/1/' + (n - 48) + (n <= 51 ? ' · trunk' : ' · libre');
+  el.innerHTML = n + (up.has(n) ? '<span class="link"></span>' : ''); el.onclick = () => pick(el, n); sfp.appendChild(el);
+}
+face.appendChild(sfp);
+</script>
+</body>
+</html>
