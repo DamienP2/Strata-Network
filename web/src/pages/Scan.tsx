@@ -736,9 +736,13 @@ function PlanBlock({
       const s = ipState(a);
       const cls = out ? 'na' : s === 'used' ? 'used' : s === 'offline' ? 'off' : s === 'reserved' ? 'resv' : '';
       const what = out ? (n === range.lo ? t('network') : n === range.hi ? t('broadcast') : t('outside the range')) : stateWord(s);
+      // The label, else the DNS name (its first part: "ptz-03" for "ptz-03.regie.lan").
+      const name = a?.label || (a?.name && !/^\d+(\.\d+){3}$/.test(a.name) ? a.name.split('.')[0] : '');
+      const full = [ip, what, a?.label, a?.name].filter(Boolean).join(' · ');
       cells.push(
-        <button key={i} type="button" className={`ipc ${cls} ${n === gw ? 'gw' : ''} ${n === sel ? 'sel' : ''}`} title={`${ip} · ${what}${a?.label ? ` · ${a.label}` : ''}`} disabled={out} onClick={() => onSel(n)}>
-          {i}
+        <button key={i} type="button" className={`ipc ${cls} ${n === gw ? 'gw' : ''} ${n === sel ? 'sel' : ''}`} title={full} disabled={out} onClick={() => onSel(n)}>
+          <span className="ipc-n">{i}</span>
+          {name && <span className="ipc-name">{name}</span>}
         </button>,
       );
     }

@@ -613,7 +613,12 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 .ip-rows .badge { margin-left: 6px; }
 .ip-plan-block + .ip-plan-block { margin-top: 14px; }
 .ip-plan-title { margin: 0 0 8px; font: 600 12px var(--mono); color: var(--text-2); }
-.ip-plan-wait { height: 540px; }
+.ip-plan-wait { height: 930px; }
+/* Plan: the number, and under it the label or the DNS name */
+.ip-plan .ipc { height: 54px; display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 1px; padding: 0 4px; min-width: 0; }
+.ipc-n { text-align: center; }
+.ipc-name { font: 500 11px/1.2 Inter, system-ui, sans-serif; color: var(--text-2); text-align: center; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ipc.used .ipc-name { color: var(--text); }
 .kind.bad { background: var(--live-soft); color: #ff8aa0; }
 .kind.data { background: rgba(232, 121, 249, 0.15); color: #e879f9; }
 .data-table tbody tr.unseen td { color: var(--text); font-weight: 600; }
