@@ -164,7 +164,7 @@ pub fn router() -> Router<Shared> {
         .route("/api/security/sso/test", post(security::sso_test))
         // Real time
         .route("/ws", get(crate::ws::handler))
-    // ---- Routes of the network features go here (e.g. `.merge(crate::network::router())`). ----
+        .merge(crate::net::api::router())
 }
 
 #[cfg(test)]

@@ -51,7 +51,7 @@ pub fn unit_text(exe: &Path, bind: &str, data: &Path) -> String {
         "[Unit]\nDescription=Strata Network\nAfter=network-online.target\nWants=network-online.target\n\n\
 [Service]\nType=simple\nUser={NAME}\nGroup={NAME}\nExecStart=\"{}\" run --default-bind {bind} --data-dir \"{}\"\n\
 Restart=always\nRestartSec=2\nNoNewPrivileges=yes\nProtectSystem=full\nReadWritePaths={}\n\
-AmbientCapabilities=CAP_NET_BIND_SERVICE\nLimitNOFILE=65536\n\n[Install]\nWantedBy=multi-user.target\n",
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW\nLimitNOFILE=65536\n\n[Install]\nWantedBy=multi-user.target\n",
         exe.display(),
         data.display(),
         data.display()
@@ -293,6 +293,6 @@ mod tests {
         let u = unit_text(Path::new("/opt/strata/strata-network"), "0.0.0.0:8080", Path::new("/var/lib/strata-network"));
         assert!(u.contains("ExecStart=\"/opt/strata/strata-network\" run --default-bind 0.0.0.0:8080 --data-dir \"/var/lib/strata-network\""));
         assert!(u.contains("Restart=always") && u.contains("RestartSec=2") && u.contains("ReadWritePaths=/var/lib/strata-network"));
-        assert!(u.contains("AmbientCapabilities=CAP_NET_BIND_SERVICE") && u.contains("LimitNOFILE=65536") && u.contains("ProtectSystem=full"));
+        assert!(u.contains("AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW") && u.contains("LimitNOFILE=65536") && u.contains("ProtectSystem=full"));
     }
 }

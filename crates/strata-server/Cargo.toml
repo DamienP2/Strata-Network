@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 serde.workspace = true
+strata-net = { path = "../strata-net" }
 serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true

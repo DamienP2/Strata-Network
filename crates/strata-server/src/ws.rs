@@ -23,7 +23,7 @@ pub fn hello(s: &AppState, user: &User) -> Value {
         "serverName": cfg.name,
         "serverTime": crate::paths::now_ms(),
         "timezone": cfg.timezone_name(),
-        // ---- Lists of the network features go here (filtered for `user`). ----
+        "scans": s.net.snapshot_scans(),
     })
 }
 

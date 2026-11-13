@@ -88,7 +88,8 @@ pub struct AppState {
     pub logins: Arc<Logins>,
     pub sso: Arc<Sso>,
     pub supervised: bool,
-    // ---- State of the network features (inventory, scanner…) goes here. ----
+    /// The network features (inventory, scans, multicast…), shared by every cycle.
+    pub net: Arc<crate::net::Net>,
 }
 
 impl AppState {

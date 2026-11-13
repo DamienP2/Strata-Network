@@ -28,6 +28,7 @@ pub mod config;
 pub mod guard;
 pub mod health;
 pub mod logs;
+pub mod net;
 pub mod paths;
 pub mod perf;
 pub mod prefs;
@@ -277,6 +278,8 @@ pub async fn serve(args: RunArgs, shutdown: impl Future<Output = ()> + Send + 's
     let auth = Arc::new(auth::Auth::load(&data_dir));
     let logins = Arc::new(guard::Logins::new());
     let sso = Arc::new(sso::Sso::new());
+    // The network inventory, scans and listeners live across hot restarts too.
+    let network = net::Net::start(&data_dir);
     let (stop_tx, stop_rx) = watch::channel(false);
     {
         let stop_tx = stop_tx.clone();
@@ -322,7 +325,9 @@ pub async fn serve(args: RunArgs, shutdown: impl Future<Output = ()> + Send + 's
             logins: logins.clone(),
             sso: sso.clone(),
             supervised,
+            net: network.clone(),
         });
+        network.attach(&shared);
         let app = build_app(&shared, &args);
         let https = https.map(|(addr, std, cfg)| {
             let handle = axum_server::Handle::<SocketAddr>::new();

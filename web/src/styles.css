@@ -613,7 +613,7 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 .ip-rows .badge { margin-left: 6px; }
 .ip-plan-block + .ip-plan-block { margin-top: 14px; }
 .ip-plan-title { margin: 0 0 8px; font: 600 12px var(--mono); color: var(--text-2); }
-.ip-plan-wait { height: 274px; }
+.ip-plan-wait { height: 540px; }
 .kind.bad { background: var(--live-soft); color: #ff8aa0; }
 .kind.data { background: rgba(232, 121, 249, 0.15); color: #e879f9; }
 .data-table tbody tr.unseen td { color: var(--text); font-weight: 600; }
@@ -639,3 +639,11 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 .tree-row .vlan-sw { width: 10px; height: 10px; }
 .net-actions { display: flex; align-items: center; gap: 8px; }
 .file-hidden { display: none; }
+.lib-nav-section .grow { flex: 1; }
+.net-page.two:has(> .panel.right) { grid-template-columns: 240px minmax(0, 1fr) 340px; }
+.data-table.ip-rows { table-layout: fixed; }
+.data-table tbody tr.pad td { padding: 0; border: 0; }
+.data-table tbody tr.pad:hover td { background: none; }
+.set-field > .segmented { align-self: flex-start; }
+.set-field > .segmented button { padding: 5px 10px; font-size: 12px; }
+.modal .set-field > .dd-btn { height: var(--h-control); }

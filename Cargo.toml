@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/strata-server", "crates/strata-tray"]
+members = ["crates/strata-net", "crates/strata-server", "crates/strata-tray"]
 
 [workspace.package]
 version = "0.1.0"

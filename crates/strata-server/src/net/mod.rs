@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 use serde::Serialize;
 use tokio::sync::mpsc;
 
-use crate::paths::{new_id, now_ms, read_json, write_json};
+use crate::paths::{new_id, now_ms, read_json};
 use crate::state::{AppState, Audience};
 
 pub mod api;

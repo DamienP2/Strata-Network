@@ -133,21 +133,21 @@ impl Net {
                     let mut st = self.store.lock().unwrap();
                     // Machines only a router knows (SNMP ARP table).
                     if !stopped {
-                        for (ip, mac) in arp.iter().filter(|(ip, _)| range.contains(**ip) && !found.contains(*ip)) {
+                        let quiet: Vec<(Ipv4Addr, String)> = arp.into_iter().filter(|(ip, _)| range.contains(*ip) && !found.contains(ip)).collect();
+                        for (ip, mac) in quiet {
                             let h = Host {
-                                ip: *ip,
+                                ip,
                                 via: scan::Via::Arp,
                                 rtt_ms: None,
-                                vendor: strata_net::mac::parse(mac).and_then(|m| strata_net::mac::vendor(&m)).map(Into::into),
+                                vendor: strata_net::mac::parse(&mac).and_then(|m| strata_net::mac::vendor(&m)).map(Into::into),
                                 mac: Some(mac.clone()),
                                 name: None,
                                 name_source: None,
                                 ports: vec![],
                             };
-                            let mut a = merge(&self, &mut st, h, now);
-                            a.via = Some("snmp".into());
-                            st.address(*ip).via = Some("snmp".into());
-                            found.insert(*ip);
+                            merge(&self, &mut st, h, now);
+                            st.address(ip).via = Some("snmp".into());
+                            found.insert(ip);
                         }
                     }
                     let mut gone = Vec::new();
