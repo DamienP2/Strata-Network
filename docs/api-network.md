@@ -93,8 +93,9 @@ interface LivePort {
   inHistory: number[]; outHistory: number[];   // rates, oldest first, ≤ 60
 }
 
-interface SnmpAgent {          // read-only, SNMP v2c
+interface SnmpAgent {          // read-only, SNMP v2c or v3
   id: string; name: string; ip: string; port: number /* 161 */; community: string /* sent masked "••••••••" */;
+  v3?: { user: string; auth: 'none' | 'md5' | 'sha' | 'sha256'; authPassword: string; privacy: 'none' | 'des' | 'aes128'; privPassword: string } | null;   // SNMP v3 instead of the community; passwords sent masked
   readArp: boolean;            // routers: find machines that answer nothing else
   readMulticast: boolean;      // routers: multicast routing table (streams, sources, rates)
   readSwitch: boolean;         // switches: interface names, MAC table, LLDP
@@ -150,7 +151,7 @@ interface HistoryEntry { at: number; user: string /* display name, or "scheduler
 | `POST /api/switches/{id}/take` | `{ports: number[] \| null}` (null = every port with a diff) → `Switch` | copies the switch's setup into the inventory; 404 "the switch is not online", 409 "the vlan setup of the switch is not known yet"; `changed: switches` |
 | `GET /api/snmp` · `POST` · `PUT /{id}` · `DELETE /{id}` | `SnmpAgent` | admin only for writes; `changed: snmp` |
 | `POST /api/snmp/{id}/poll` | → `SnmpAgent` | reads now (also every 5 min) |
-| `POST /api/snmp/test` | `{ip, port, community}` → `{name, description}` | 502 + message on failure |
+| `POST /api/snmp/test` | `{ip, port, community, v3?, id?}` → `{name, description}` | 502 + message on failure; masked secrets are taken from agent `id` |
 | `GET /api/multicast` | → `{iface: string, ifaces: {name, ip}[], streams: Stream[], checkMaxMbps: number}` | `changed: multicast` (sent at most every 2 s) |
 | `PUT /api/multicast/settings` | `{iface, checkMaxMbps}` → 204 | admin |
 | `POST /api/multicast/check` | `{group, port}` → `{received, cutShort, bps, pps}` | one at a time (409) |
@@ -186,8 +187,8 @@ WebSocket, besides `changed`:
   (`GigabitEthernet1/0/12` = `Gi1/0/12`). The switch's setup of a port: off when administratively down, trunk when
   it carries tagged VLANs (native = the PVID when it leaves untagged), else access on the PVID; it differs from the
   inventory when the mode, the access VLAN or the tagged VLANs differ (a trunk's native VLAN only when the
-  inventory sets one; VLAN 1, where switches leave unconfigured ports, matches an inventory port without VLAN). `take` copies mode, VLAN and tagged VLANs (a disabled port keeps its VLANs), and the port
-  description as label when the inventory has none. Removing the switch's agent puts it offline.
+  inventory sets one; VLAN 1, where switches leave unconfigured ports, matches an inventory port without VLAN). `take` copies mode, VLAN and tagged VLANs (a disabled port keeps its VLANs; VLAN 1 becomes no VLAN unless
+  the inventory has a VLAN 1), and the port description as label when the inventory has none. Removing the switch's agent puts it offline.
 - **History**: every write route above adds an entry (`action`: "created network", "scanned", "changed port", "switch online", "switch offline",
   "changed read interval", "took config from switch", …).
 - Storage: `<data>/network/{networks,addresses,vlans,switches,snmp,multicast,alerts,history}.json`, atomic writes;

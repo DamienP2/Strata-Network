@@ -52,7 +52,7 @@ impl Net {
     }
 
     async fn poll_agent(self: &Arc<Self>, a: &SnmpAgent) -> Result<String, String> {
-        let session = Session::open(&Agent { ip: a.ip, port: a.port, community: a.community.clone() }, TIMEOUT).await.map_err(|e| e.to_string())?;
+        let session = session(a).await?;
         let id = s::identity(&session).await.map_err(|e| e.to_string())?;
         let mut said = vec![id.name.clone()];
         if a.read_arp {
@@ -134,6 +134,14 @@ impl Net {
         drop(st);
         self.changed("switches");
         self.changed("addresses");
+    }
+}
+
+/// A read-only session with the agent.
+pub async fn session(a: &SnmpAgent) -> Result<Session, String> {
+    match &a.v3 {
+        Some(v3) => Session::open_v3(a.ip, a.port, v3, TIMEOUT).await.map_err(|e| e.to_string()),
+        None => Session::open(&Agent { ip: a.ip, port: a.port, community: a.community.clone() }, TIMEOUT).await.map_err(|e| e.to_string()),
     }
 }
 

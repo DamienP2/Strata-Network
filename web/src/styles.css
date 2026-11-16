@@ -794,6 +794,8 @@ tr:hover .dd-btn.cell > svg, .dd-btn.cell.open > svg { opacity: 1; }
 .pt tr.has-diff td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .pt td.vlan-cell > .cell-in { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .pt td.vlan-cell > .cell-in > :first-child { min-width: 0; }
+.pt td.vlan-cell .dd-btn.cell { width: auto; flex: 0 1 auto; margin-right: 0; }
+.sw-face.live-face .sw-port.diff:not(.sel) { outline: 2px solid var(--warn); outline-offset: 2px; }
 .take { flex: none; height: 22px; padding: 0 7px; font-size: 11px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel-3); color: var(--text-2); cursor: pointer; }
 .take:hover { color: var(--text); border-color: var(--text-3); }
 .sw-face.live-face .sw-port .link { background: #22c55e; box-shadow: 0 0 5px #22c55e; }

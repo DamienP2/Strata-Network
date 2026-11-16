@@ -7,11 +7,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use strata_net::snmp::{self as s, Agent, IfStat, Session, System, VlanSetup};
+use strata_net::snmp::{self as s, IfStat, System, VlanSetup};
 use tokio::task::AbortHandle;
 
 use super::model::{Switch, SwitchPort};
-use super::snmp::same_port;
+use super::snmp::{same_port, session};
 use super::Net;
 use crate::paths::now_ms;
 
@@ -19,7 +19,6 @@ use crate::paths::now_ms;
 const HISTORY: usize = 60;
 /// The identity and the VLAN setup are read again after this long.
 const SLOW: Duration = Duration::from_secs(300);
-const TIMEOUT: Duration = Duration::from_secs(2);
 
 /// One faceplate port as the switch sees it now.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -250,8 +249,11 @@ pub fn diffs(sw: &Switch, ports: &[LivePort], vlans: &[PortVlans]) -> Vec<Diff> 
 
 /// Copies the switch's setup of these ports (`None`: every port with a
 /// difference) into the inventory: mode, VLAN, tagged VLANs, and the port
-/// description as label where the inventory has none. Returns the names of the ports taken.
-pub fn take(sw: &mut Switch, live: &Live, which: Option<&[u16]>) -> Vec<String> {
+/// description as label where the inventory has none. VLAN 1, the switch's
+/// default, becomes no VLAN unless the inventory has a VLAN 1 (`known`).
+/// Returns the names of the ports taken.
+pub fn take(sw: &mut Switch, live: &Live, which: Option<&[u16]>, known: &[u16]) -> Vec<String> {
+    let vlan = |v: Option<u16>| v.filter(|v| *v != 1 || known.contains(&1));
     let Some(vlans) = &live.vlans else { return vec![] };
     let wanted: Vec<u16> = match which {
         Some(w) => w.to_vec(),
@@ -266,12 +268,12 @@ pub fn take(sw: &mut Switch, live: &Live, which: Option<&[u16]>) -> Vec<String> 
             "off" => p.mode = "off".into(),
             "trunk" => {
                 p.mode = "trunk".into();
-                p.vlan = st.vlan;
+                p.vlan = vlan(st.vlan);
                 p.tagged = st.tagged;
             }
             _ => {
                 p.mode = "access".into();
-                p.vlan = st.vlan;
+                p.vlan = vlan(st.vlan);
                 p.tagged = vec![];
             }
         }
@@ -362,7 +364,7 @@ impl Net {
         let agent = {
             let st = self.store.lock().unwrap();
             let sw = st.switches.iter().find(|s| s.id == id);
-            sw.and_then(|sw| sw.snmp.as_deref()).and_then(|a| st.snmp.iter().find(|x| x.id == a)).map(|a| Agent { ip: a.ip, port: a.port, community: a.community.clone() })
+            sw.and_then(|sw| sw.snmp.as_deref()).and_then(|a| st.snmp.iter().find(|x| x.id == a)).cloned()
         };
         let (need_system, need_vlans) = {
             let map = self.live.lock().unwrap();
@@ -372,7 +374,7 @@ impl Net {
         };
         let read = async {
             let agent = agent.ok_or_else(|| "the switch has no snmp agent".to_string())?;
-            let session = Session::open(&agent, TIMEOUT).await.map_err(|e| e.to_string())?;
+            let session = session(&agent).await?;
             let stats = s::if_stats(&session).await.map_err(|e| e.to_string())?;
             let system = if need_system { Some(s::system(&session).await.ok()) } else { None };
             let setup = if need_vlans { Some(s::vlan_setup(&session).await.ok()) } else { None };
@@ -514,20 +516,24 @@ mod tests {
     fn taking_from_the_switch() {
         let mut s = inventory();
         let l = live_of(&s);
-        assert_eq!(take(&mut s, &l, Some(&[2])), vec!["Gi1/0/2".to_string()]);
+        assert_eq!(take(&mut s, &l, Some(&[2]), &[]), vec!["Gi1/0/2".to_string()]);
         assert_eq!((s.ports[1].vlan, s.ports[1].label.as_str()), (Some(10), "ptz3"));
         assert_eq!(s.ports[3].mode, "access");
-        let names = take(&mut s, &l, None);
+        let names = take(&mut s, &l, None, &[]);
         assert_eq!(names, vec!["Gi1/0/2", "Gi1/0/3", "Gi1/0/4"]);
         assert_eq!((s.ports[2].mode.as_str(), s.ports[2].vlan), ("off", Some(99)));
-        assert_eq!((s.ports[3].mode.as_str(), s.ports[3].vlan, s.ports[3].tagged.clone()), ("trunk", Some(1), vec![30, 40]));
+        // VLAN 1 (native here) is the switch's default: no VLAN in an inventory that has no VLAN 1.
+        assert_eq!((s.ports[3].mode.as_str(), s.ports[3].vlan, s.ports[3].tagged.clone()), ("trunk", None, vec![30, 40]));
+        let mut with_one = inventory();
+        take(&mut with_one, &l, Some(&[4]), &[1, 10]);
+        assert_eq!(with_one.ports[3].vlan, Some(1));
         // A label set by hand stays.
         s.ports[4].label = "Uplink cœur".into();
-        take(&mut s, &l, Some(&[5]));
+        take(&mut s, &l, Some(&[5]), &[]);
         assert_eq!(s.ports[4].label, "Uplink cœur");
         assert!(diffs(&s, &l.ports, l.vlans.as_deref().unwrap()).is_empty());
         // Nothing is taken before the VLAN setup is known.
         let blind = Live { vlans: None, ..l };
-        assert!(take(&mut s, &blind, None).is_empty());
+        assert!(take(&mut s, &blind, None, &[]).is_empty());
     }
 }

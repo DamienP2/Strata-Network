@@ -1,16 +1,16 @@
 import { useState, type FormEvent } from 'react';
 import { CircleCheck, CircleX, Network, Pencil, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react';
-import { t, tn } from '../i18n';
+import { t, tc, tn } from '../i18n';
 import { api } from '../store';
 import { Field, FieldGroup } from './ui';
-import { Check } from '../ui/fields';
+import { Check, Segmented } from '../ui/fields';
 import { confirmDialog } from '../ui/dialogs';
 import { errorText } from '../ui/serverError';
 import { fmtAgo, fmtDateTime } from '../ui/format';
 import { PageHead } from '../pages/SidePage';
 import { validIp } from '../net/ip';
 import { fail, useList } from '../net/model';
-import type { SnmpAgent } from '../net/types';
+import type { SnmpAgent, SnmpV3 } from '../net/types';
 
 export function Snmp() {
   const [agents, , setAgents] = useList<SnmpAgent[]>('snmp', '/api/snmp');
@@ -113,6 +113,10 @@ function AgentModal({ agent, onClose }: { agent: SnmpAgent | null; onClose: () =
   const [ip, setIp] = useState(agent?.ip ?? '');
   const [port, setPort] = useState(String(agent?.port ?? 161));
   const [community, setCommunity] = useState(agent?.community ?? 'public');
+  const [version, setVersion] = useState<'v2c' | 'v3'>(agent?.v3 ? 'v3' : 'v2c');
+  const [v3, setV3] = useState<SnmpV3>(agent?.v3 ?? { user: '', auth: 'sha', authPassword: '', privacy: 'aes128', privPassword: '' });
+  const setV = (patch: Partial<SnmpV3>) => setV3((o) => ({ ...o, ...patch }));
+  const security = version === 'v3' ? { community: '', v3 } : { community, v3: null };
   const [readArp, setReadArp] = useState(agent?.readArp ?? false);
   const [readMulticast, setReadMulticast] = useState(agent?.readMulticast ?? false);
   const [readSwitch, setReadSwitch] = useState(agent?.readSwitch ?? false);
@@ -126,7 +130,7 @@ function AgentModal({ agent, onClose }: { agent: SnmpAgent | null; onClose: () =
     e.preventDefault();
     if (busy || badIp || badPort) return;
     setBusy(true);
-    const body = { ...(agent ?? {}), name: name.trim(), ip: ip.trim(), port: p, community, readArp, readMulticast, readSwitch };
+    const body = { ...(agent ?? {}), name: name.trim(), ip: ip.trim(), port: p, ...security, readArp, readMulticast, readSwitch };
     try {
       if (agent) await api('PUT', `/api/snmp/${agent.id}`, body);
       else await api('POST', '/api/snmp', body);
@@ -140,7 +144,7 @@ function AgentModal({ agent, onClose }: { agent: SnmpAgent | null; onClose: () =
   const runTest = async () => {
     setTest('run');
     try {
-      const r = await api<{ name: string; description: string }>('POST', '/api/snmp/test', { ip: ip.trim(), port: p, community, id: agent?.id });
+      const r = await api<{ name: string; description: string }>('POST', '/api/snmp/test', { ip: ip.trim(), port: p, ...security, id: agent?.id });
       setTest({ ok: true, text: [r.name, r.description].filter(Boolean).join(' · ') || t('Answered') });
     } catch (err) {
       setTest({ ok: false, text: errorText(err) });
@@ -166,9 +170,56 @@ function AgentModal({ agent, onClose }: { agent: SnmpAgent | null; onClose: () =
           <Field label={t('Port')}>
             <input className="mono" value={port} inputMode="numeric" aria-invalid={badPort} autoComplete="off" onChange={(e) => setPort(e.target.value)} />
           </Field>
-          <Field label={t('Community')}>
-            <input type="password" value={community} autoComplete="new-password" onChange={(e) => setCommunity(e.target.value)} />
+          <Field label={t('SNMP version')}>
+            <Segmented
+              value={version}
+              onChange={setVersion}
+              options={[
+                { value: 'v2c', label: 'v2c' },
+                { value: 'v3', label: 'v3' },
+              ]}
+            />
           </Field>
+          {version === 'v2c' ? (
+            <Field label={t('Community')}>
+              <input type="password" value={community} autoComplete="new-password" onChange={(e) => setCommunity(e.target.value)} />
+            </Field>
+          ) : (
+            <>
+              <Field label={t('SNMP user')}>
+                <input value={v3.user} autoComplete="off" onChange={(e) => setV({ user: e.target.value })} />
+              </Field>
+              <Field label={t('Authentication')}>
+                <Segmented
+                  value={v3.auth}
+                  onChange={(auth) => setV(auth === 'none' ? { auth, privacy: 'none' } : { auth })}
+                  options={[
+                    { value: 'none', label: tc('snmpAuth', 'None') },
+                    { value: 'md5', label: 'MD5' },
+                    { value: 'sha', label: 'SHA' },
+                    { value: 'sha256', label: 'SHA-256' },
+                  ]}
+                />
+              </Field>
+              <Field label={t('Authentication password')}>
+                <input type="password" value={v3.authPassword} disabled={v3.auth === 'none'} autoComplete="new-password" onChange={(e) => setV({ authPassword: e.target.value })} />
+              </Field>
+              <Field label={t('Encryption')}>
+                <Segmented
+                  value={v3.privacy}
+                  onChange={(privacy) => setV({ privacy })}
+                  options={[
+                    { value: 'none', label: tc('snmpPriv', 'None') },
+                    { value: 'des', label: 'DES', disabled: v3.auth === 'none' },
+                    { value: 'aes128', label: 'AES-128', disabled: v3.auth === 'none' },
+                  ]}
+                />
+              </Field>
+              <Field label={t('Encryption password')}>
+                <input type="password" value={v3.privPassword} disabled={v3.privacy === 'none'} autoComplete="new-password" onChange={(e) => setV({ privPassword: e.target.value })} />
+              </Field>
+            </>
+          )}
         </div>
         <FieldGroup label={t('Reads')}>
           <Check checked={readArp} onChange={setReadArp}>

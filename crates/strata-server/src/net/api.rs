@@ -618,8 +618,9 @@ async fn take_from_switch(State(s): State<Shared>, me: Session, Path(id): Path<S
     }
     let (sw, names) = {
         let mut st = net(&s).store.lock().unwrap();
+        let known: Vec<u16> = st.vlans.keys().copied().collect();
         let sw = st.switches.iter_mut().find(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
-        let names = super::live::take(sw, &live, b.ports.as_deref());
+        let names = super::live::take(sw, &live, b.ports.as_deref(), &known);
         let sw = sw.clone();
         net(&s).check_vlans(&mut st);
         (sw, names)
@@ -638,7 +639,30 @@ fn masked(mut a: SnmpAgent) -> SnmpAgent {
     if !a.community.is_empty() {
         a.community = MASKED.into();
     }
+    if let Some(v3) = a.v3.as_mut() {
+        for pw in [&mut v3.auth_password, &mut v3.priv_password] {
+            if !pw.is_empty() {
+                *pw = MASKED.into();
+            }
+        }
+    }
     a
+}
+
+/// Secrets sent back masked keep their stored value.
+fn unmask(a: &mut SnmpAgent, cur: Option<&SnmpAgent>) {
+    let Some(cur) = cur else { return };
+    if a.community == MASKED {
+        a.community = cur.community.clone();
+    }
+    if let (Some(v3), Some(old)) = (a.v3.as_mut(), cur.v3.as_ref()) {
+        if v3.auth_password == MASKED {
+            v3.auth_password = old.auth_password.clone();
+        }
+        if v3.priv_password == MASKED {
+            v3.priv_password = old.priv_password.clone();
+        }
+    }
 }
 
 async fn snmp_list(State(s): State<Shared>, _me: Session) -> Json<Vec<SnmpAgent>> {
@@ -659,6 +683,9 @@ fn check_snmp(a: &mut SnmpAgent) -> ApiResult<()> {
 async fn create_snmp(State(s): State<Shared>, me: Session, Json(mut a): Json<SnmpAgent>) -> ApiResult<Json<SnmpAgent>> {
     require(me.user.is_admin())?;
     check_snmp(&mut a)?;
+    if let Some(v3) = &a.v3 {
+        v3.check().map_err(bad)?;
+    }
     a.id = new_id();
     a.last_poll = None;
     net(&s).store.lock().unwrap().snmp.push(a.clone());
@@ -677,8 +704,9 @@ async fn update_snmp(State(s): State<Shared>, me: Session, Path(id): Path<String
     {
         let mut st = net(&s).store.lock().unwrap();
         let cur = st.snmp.iter_mut().find(|x| x.id == id).ok_or_else(|| not_found("snmp agent"))?;
-        if a.community == MASKED {
-            a.community = cur.community.clone();
+        unmask(&mut a, Some(cur));
+        if let Some(v3) = &a.v3 {
+            v3.check().map_err(bad)?;
         }
         a.id = id.clone();
         a.last_poll = cur.last_poll.clone();
@@ -726,21 +754,36 @@ struct SnmpTest {
     ip: Ipv4Addr,
     #[serde(default)]
     port: u16,
+    #[serde(default)]
     community: String,
+    #[serde(default)]
+    v3: Option<strata_net::snmpv3::V3>,
     #[serde(default)]
     id: Option<String>,
 }
 
 async fn snmp_test(State(s): State<Shared>, me: Session, Json(t): Json<SnmpTest>) -> ApiResult<Json<strata_net::snmp::Identity>> {
     require(me.user.is_admin())?;
-    let community = if t.community == MASKED {
-        let st = net(&s).store.lock().unwrap();
-        t.id.as_deref().and_then(|id| st.snmp.iter().find(|a| a.id == id)).map(|a| a.community.clone()).unwrap_or_default()
-    } else {
-        t.community
+    let mut a = SnmpAgent {
+        id: String::new(),
+        name: String::new(),
+        ip: t.ip,
+        port: if t.port == 0 { 161 } else { t.port },
+        community: t.community,
+        v3: t.v3,
+        read_arp: false,
+        read_multicast: false,
+        read_switch: false,
+        last_poll: None,
     };
-    let agent = strata_net::snmp::Agent { ip: t.ip, port: if t.port == 0 { 161 } else { t.port }, community };
-    let sess = strata_net::snmp::Session::open(&agent, std::time::Duration::from_secs(2)).await.map_err(|e| status(502, e.to_string()))?;
+    {
+        let st = net(&s).store.lock().unwrap();
+        unmask(&mut a, t.id.as_deref().and_then(|id| st.snmp.iter().find(|x| x.id == id)));
+    }
+    if let Some(v3) = &a.v3 {
+        v3.check().map_err(bad)?;
+    }
+    let sess = super::snmp::session(&a).await.map_err(|e| status(502, e))?;
     strata_net::snmp::identity(&sess).await.map(Json).map_err(|e| status(502, e.to_string()))
 }
 

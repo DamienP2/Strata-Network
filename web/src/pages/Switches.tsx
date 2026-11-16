@@ -300,7 +300,7 @@ function SwitchView({
       <button
         key={p.n}
         type="button"
-        className={`sw-port ${isSfp ? 'sfp' : ''} ${p.mode === 'trunk' ? 'trunk' : ''} ${p.mode === 'off' ? 'off' : ''} ${live && !up ? 'down' : ''} ${ticked.has(p.n) ? 'sel' : ''}`}
+        className={`sw-port ${isSfp ? 'sfp' : ''} ${p.mode === 'trunk' ? 'trunk' : ''} ${p.mode === 'off' ? 'off' : ''} ${live && !up ? 'down' : ''} ${diffOf.has(p.n) ? 'diff' : ''} ${ticked.has(p.n) ? 'sel' : ''}`}
         style={p.mode !== 'off' ? vlanStyle(vlanById(vlans, p.vlan)) : undefined}
         title={live ? `${portTitle(p)} · ${linkTitle(lp)}` : portTitle(p)}
         onClick={() => pick(p.n)}
@@ -467,9 +467,9 @@ function SwitchView({
               <colgroup>
                 {editable && <col style={{ width: 34 }} />}
                 <col style={{ width: 118 }} />
-                <col style={{ width: '15%' }} />
+                <col style={{ width: '14%' }} />
                 <col style={{ width: 156 }} />
-                <col style={{ width: '19%' }} />
+                <col style={{ width: '21%' }} />
                 <col style={{ width: 96 }} />
                 <col style={{ width: 170 }} />
                 <col style={{ width: 74 }} />
@@ -802,7 +802,8 @@ function useLive(id: string, online: boolean): Live | null {
     serverEvents.addEventListener('switchLive', on);
     return () => serverEvents.removeEventListener('switchLive', on);
   }, [id, online, load]);
-  useChanged('switches', load);
+  // Aucun « changed » ne porte ce nom : rechargé seulement après une reconnexion (hello).
+  useChanged('switchLive', load);
   return online ? live : null;
 }
 
@@ -919,6 +920,7 @@ function LiveSpark({ a, b }: { a: number[]; b: number[] }) {
   const W = 48;
   const H = 16;
   const data = a.map((v, i) => v + (b[i] ?? 0));
+  if (data.length === 1) data.push(data[0]);
   if (data.length < 2) return <svg width={W} height={H} />;
   const max = Math.max(...data);
   const min = Math.min(...data);

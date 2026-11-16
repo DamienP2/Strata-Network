@@ -290,6 +290,9 @@ pub struct SnmpAgent {
     pub port: u16,
     #[serde(default)]
     pub community: String,
+    /// SNMP v3 user (the community is then unused).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v3: Option<strata_net::snmpv3::V3>,
     #[serde(default)]
     pub read_arp: bool,
     #[serde(default)]

@@ -136,10 +136,20 @@ export interface SnmpAgent {
   ip: string;
   port: number;
   community: string;
+  /** SNMP v3 user; absent = v2c with the community. */
+  v3?: SnmpV3 | null;
   readArp: boolean;
   readMulticast: boolean;
   readSwitch: boolean;
   lastPoll?: { at: number; ok: boolean; message: string };
+}
+
+export interface SnmpV3 {
+  user: string;
+  auth: 'none' | 'md5' | 'sha' | 'sha256';
+  authPassword: string;
+  privacy: 'none' | 'des' | 'aes128';
+  privPassword: string;
 }
 
 export type StreamKind = 'video' | 'audio' | 'data' | 'mpegTs' | 'rtp' | 'ptp' | 'sap' | 'other';
