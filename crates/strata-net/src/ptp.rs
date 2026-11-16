@@ -75,8 +75,9 @@ pub fn identity_mac(id: &str) -> Option<String> {
 
 /// Clock accuracy (IEEE 1588 table 6) in nanoseconds.
 pub fn accuracy_ns(a: u8) -> Option<f64> {
-    let table = [25.0, 100.0, 250.0, 1e3, 2.5e3, 1e4, 2.5e4, 1e5, 2.5e5, 1e6, 2.5e6, 1e7, 2.5e7, 1e8, 2.5e8, 1e9, 1e10];
-    (0x20..=0x31).contains(&a).then(|| table[usize::from(a - 0x20)])
+    // 0x20 = 25 ns … 0x30 = 10 s; 0x31 (> 10 s), 0xFE (unknown) and reserved codes give None.
+    const TABLE: [f64; 17] = [25.0, 100.0, 250.0, 1e3, 2.5e3, 1e4, 2.5e4, 1e5, 2.5e5, 1e6, 2.5e6, 1e7, 2.5e7, 1e8, 2.5e8, 1e9, 1e10];
+    a.checked_sub(0x20).and_then(|i| TABLE.get(usize::from(i))).copied()
 }
 
 /// Time source (IEEE 1588 table 7).
@@ -325,5 +326,14 @@ mod tests {
         assert_eq!((s.followers[0].count, s.followers[0].domain), (2, 127));
         t.prune(FORGET_MS + 7);
         assert!(t.snapshot().followers.is_empty());
+    }
+
+    #[test]
+    fn accuracy_codes() {
+        assert_eq!(accuracy_ns(0x20), Some(25.0));
+        assert_eq!(accuracy_ns(0x30), Some(1e10));
+        for code in [0x00, 0x1F, 0x31, 0x80, 0xFE, 0xFF] {
+            assert_eq!(accuracy_ns(code), None);
+        }
     }
 }
