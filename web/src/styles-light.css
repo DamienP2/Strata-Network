@@ -25,7 +25,7 @@
 :root[data-theme='light'] .btn.warn { background: var(--warn-fill); border-color: var(--warn-fill); }
 :root[data-theme='light'] .modal-back { background: rgba(22, 25, 37, 0.35); }
 :root[data-theme='light'] .modal.dialog.danger .dialog-icon { color: var(--t-red); }
-:root[data-theme='light'] :is(.toast, .menu, .modal, .login-card, .dd-list, .tip, .save-bar) { box-shadow: 0 12px 32px rgba(22, 25, 37, 0.16); }
+:root[data-theme='light'] :is(.toast, .menu, .modal, .login-card, .dd-list, .tip, .save-bar, .pop, .bulk) { box-shadow: 0 12px 32px rgba(22, 25, 37, 0.16); }
 :root[data-theme='light'] .login-page { background: radial-gradient(ellipse at 30% 0%, #dfe3fb 0%, var(--bg) 60%); }
 :root[data-theme='light'] .user-card.role-admin { --role: var(--t-red); }
 :root[data-theme='light'] .badge.role-admin { color: var(--t-red); }

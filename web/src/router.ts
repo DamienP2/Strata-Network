@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 export type Route =
   | { page: 'home' }
   | { page: 'scan'; networkId?: string; ip?: string }
-  | { page: 'vlans' }
   | { page: 'switches'; id?: string }
   | { page: 'multicast' }
   | { page: 'topology' }
@@ -17,8 +16,8 @@ export function parseRoute(pathname: string, search = ''): Route {
   switch (parts[0]) {
     case 'scan':
       return { page: 'scan', networkId: parts[1], ip: new URLSearchParams(search).get('ip') ?? undefined };
-    case 'vlans':
-      return { page: 'vlans' };
+    case 'vlans': // ancienne adresse : la page est passée dans Système
+      return { page: 'system', section: 'vlans' };
     case 'switches':
       return { page: 'switches', id: parts[1] };
     case 'multicast':
@@ -104,6 +103,7 @@ if (typeof window !== 'undefined') {
 export function useRoute(): Route {
   const [route, setRoute] = useState(() => parseRoute(location.pathname, location.search));
   useEffect(() => {
+    if (location.pathname.replace(/\/+$/, '') === '/vlans') navigate('/system/vlans', true);
     const on = () => setRoute(parseRoute(location.pathname, location.search));
     addEventListener('popstate', on);
     return () => removeEventListener('popstate', on);

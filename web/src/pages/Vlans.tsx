@@ -8,6 +8,7 @@ import { confirmDialog } from '../ui/dialogs';
 import { validCidr, validIp } from '../net/ip';
 import { fail, useList } from '../net/model';
 import { VlanTag } from '../net/parts';
+import { PageHead } from './SidePage';
 import type { Network, Switch, Vlan } from '../net/types';
 
 const COLORS = ['#8fa3ff', '#22c55e', '#2dd4bf', '#60a5fa', '#e879f9', '#f5c542', '#f5a524', '#ff3b5c', '#a3a8bf'];
@@ -45,78 +46,69 @@ export function Vlans() {
 
   if (!vlans) return <div className="loading">{t('Loading…')}</div>;
   return (
-    <main className="library">
-      <div className="library-inner">
-        <div className="settings-head">
-          <div>
-            <h1>{t('VLAN')}</h1>
-            <p className="muted">{tn(vlans.length, '{n} VLAN', '{n} VLANs')}</p>
-          </div>
-          <div className="spacer" />
-          {editable && (
-            <button className="btn primary" onClick={() => setEditing('new')}>
-              <Plus size={14} /> {t('New VLAN')}
-            </button>
-          )}
-        </div>
-        <div className="media-toolbar">
-          <label className="search">
-            <Search size={14} />
-            <input value={q} placeholder={t('Search VLANs')} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
-          </label>
-        </div>
-        {shown.length === 0 ? (
-          <div className="empty big">
-            <Layers size={22} />
-            <p>{q ? t('No match') : t('No VLAN')}</p>
-          </div>
-        ) : (
-          <table className="user-table">
-            <thead>
-              <tr>
-                <th>{t('ID')}</th>
-                <th>{t('Name')}</th>
-                <th>{t('Subnet')}</th>
-                <th>{t('Gateway')}</th>
-                <th>{t('Ports')}</th>
-                <th>{t('Machines')}</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((v) => {
-                const m = machines(v.id);
-                return (
-                  <tr key={v.id}>
-                    <td>
-                      <VlanTag vlan={v} />
-                    </td>
-                    <td>{v.name}</td>
-                    <td className="ip">{v.subnet || '—'}</td>
-                    <td className="ip">{v.gateway || '—'}</td>
-                    <td>{ports(v.id)}</td>
-                    <td>{m === null ? '—' : m}</td>
-                    <td style={{ textAlign: 'right' }}>
-                      {editable && (
-                        <>
-                          <button className="icon-btn ghost" title={t('Edit')} onClick={() => setEditing(v)}>
-                            <Pencil size={14} />
-                          </button>
-                          <button className="icon-btn ghost" title={t('Delete')} onClick={() => void remove(v)}>
-                            <Trash2 size={14} />
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+    <>
+      <PageHead title={t('VLAN')} sub={tn(vlans.length, '{n} VLAN', '{n} VLANs')}>
+        {editable && (
+          <button className="btn primary" onClick={() => setEditing('new')}>
+            <Plus size={14} /> {t('New VLAN')}
+          </button>
         )}
+      </PageHead>
+      <div className="media-toolbar">
+        <label className="search">
+          <Search size={14} />
+          <input value={q} placeholder={t('Search VLANs')} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
+        </label>
       </div>
+      {shown.length === 0 ? (
+        <div className="empty big">
+          <Layers size={22} />
+          <p>{q ? t('No match') : t('No VLAN')}</p>
+        </div>
+      ) : (
+        <table className="user-table">
+          <thead>
+            <tr>
+              <th>{t('ID')}</th>
+              <th>{t('Name')}</th>
+              <th>{t('Subnet')}</th>
+              <th>{t('Gateway')}</th>
+              <th>{t('Ports')}</th>
+              <th>{t('Machines')}</th>
+              {editable && <th />}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((v) => {
+              const m = machines(v.id);
+              return (
+                <tr key={v.id}>
+                  <td>
+                    <VlanTag vlan={v} />
+                  </td>
+                  <td>{v.name}</td>
+                  <td className="ip">{v.subnet || '—'}</td>
+                  <td className="ip">{v.gateway || '—'}</td>
+                  <td>{ports(v.id)}</td>
+                  <td>{m === null ? '—' : m}</td>
+                  {editable && (
+                    <td style={{ textAlign: 'right' }}>
+                      <button className="icon-btn ghost" title={t('Edit')} onClick={() => setEditing(v)}>
+                        <Pencil size={14} />
+                      </button>
+                      <button className="icon-btn ghost" title={t('Delete')} onClick={() => void remove(v)}>
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
       {editing && <VlanModal vlan={editing === 'new' ? null : editing} used={vlans.map((v) => v.id)} onClose={() => setEditing(null)} />}
-    </main>
+    </>
   );
 }
 

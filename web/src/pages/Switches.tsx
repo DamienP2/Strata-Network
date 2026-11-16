@@ -1,18 +1,24 @@
-import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react';
-import { EthernetPort, LayoutGrid, List, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
-import { t, tn } from '../i18n';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Check, ChevronDown, EthernetPort, Pencil, Plus, Save, Search, Trash2, X } from 'lucide-react';
+import { t, tc, tn } from '../i18n';
 import { api, can, useApp } from '../store';
 import { navigate } from '../router';
 import { Field } from '../settings/ui';
-import { Segmented, TextInput } from '../ui/fields';
+import { Segmented } from '../ui/fields';
 import { Dropdown, type DropOption } from '../ui/Dropdown';
 import { confirmDialog } from '../ui/dialogs';
 import { Empty } from '../ui/Empty';
-import { SubTabs } from './SidePage';
+import { useDisplayPref } from '../displayPrefs';
 import { byIp, validIp } from '../net/ip';
-import { KIND_ICON, displayName, fail, useAllAddresses, useList, vlanById, vlanMismatch } from '../net/model';
-import { VlanTag, vlanStyle } from '../net/parts';
+import { KIND_ICON, displayName, fail, fmtSeen, useAllAddresses, useList, vlanById } from '../net/model';
+import { InlineText, vlanStyle } from '../net/parts';
 import type { Address, Network, PortMode, SnmpAgent, Switch, SwitchPort, Vlan } from '../net/types';
+
+type PortSet = Partial<Record<keyof SwitchPort, unknown>>;
+/** Filtre : tous, un VLAN (`v:10`), les trunks, les libres. */
+type Filter = 'all' | 'trunk' | 'free' | `v:${number}`;
+
+const key = (sw: string, n: number) => `${sw}:${n}`;
 
 export function Switches({ id }: { id?: string }) {
   const user = useApp((s) => s.auth?.user);
@@ -23,141 +29,233 @@ export function Switches({ id }: { id?: string }) {
   const [agents] = useList<SnmpAgent[]>('snmp', '/api/snmp');
   const addrs = useAllAddresses(networks);
   const [editing, setEditing] = useState<Switch | 'new' | null>(null);
-  const sw = switches?.find((s) => s.id === id);
-  const first = switches?.[0]?.id;
+  const [q, setQ] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
+  const [ticked, setTicked] = useState<Set<string>>(() => new Set());
 
-  useEffect(() => {
-    if (switches && !sw && first) navigate(`/switches/${first}`, true);
-  }, [switches, sw, first]);
-
-  // Sections de la liste : le groupe de chaque switch (sans groupe d'abord).
-  const groups = useMemo(() => {
-    const m = new Map<string, Switch[]>();
-    for (const s of [...(switches ?? [])].sort((a, b) => a.name.localeCompare(b.name))) {
-      const g = s.group.trim();
-      if (!m.has(g)) m.set(g, []);
-      m.get(g)!.push(s);
+  const patch = async (sw: Switch, ports: number[], set: PortSet) => {
+    try {
+      const saved = await api<Switch>('PATCH', `/api/switches/${sw.id}/ports`, { ports, set });
+      setSwitches((list) => (list ?? []).map((x) => (x.id === saved.id ? saved : x)));
+    } catch (e) {
+      fail(e);
     }
-    return [...m.entries()].sort((a, b) => (a[0] === '' ? -1 : b[0] === '' ? 1 : a[0].localeCompare(b[0])));
+  };
+
+  const tick = (sw: Switch, ns: number[], on: boolean) =>
+    setTicked((old) => {
+      const s = new Set(old);
+      for (const n of ns) {
+        if (on) s.add(key(sw.id, n));
+        else s.delete(key(sw.id, n));
+      }
+      return s;
+    });
+
+  // Les VLAN utilisés (accès, natif ou taggués) : une puce chacun.
+  const used = useMemo(() => {
+    const ids = new Set<number>();
+    for (const sw of switches ?? [])
+      for (const p of sw.ports) {
+        if (p.mode === 'off') continue;
+        if (p.vlan !== undefined) ids.add(p.vlan);
+        if (p.mode === 'trunk') for (const v of p.tagged) ids.add(v);
+      }
+    return [...ids].sort((a, b) => a - b);
   }, [switches]);
 
-  const replace = (s: Switch) => setSwitches((switches ?? []).map((x) => (x.id === s.id ? s : x)));
+  // Raccordé à : les machines de l'inventaire et les ports des autres switchs.
+  const hostOptions = useMemo<DropOption[]>(
+    () =>
+      [...addrs.values()]
+        .filter((a) => a.up || a.label || a.lastSeen)
+        .sort((a, b) => byIp(a.ip, b.ip))
+        .map((a) => {
+          const I = KIND_ICON[a.kind ?? 'other'];
+          const name = displayName(a, a.ip);
+          return { value: `host:${a.ip}`, label: name, detail: name !== a.ip ? a.ip : undefined, sub: name !== a.ip ? a.ip : undefined, icon: <I size={12} />, group: t('Machines') };
+        }),
+    [addrs],
+  );
+  const peerOptions = (sw: Switch): DropOption[] =>
+    (switches ?? [])
+      .filter((x) => x.id !== sw.id)
+      .flatMap((x) => x.ports.map((p) => ({ value: `peer:${x.id}:${p.n}`, label: `${x.name} · ${p.name || p.n}`, sub: p.label || undefined, icon: <EthernetPort size={12} />, group: t('Switches') })));
+
+  const needle = q.trim().toLowerCase();
+  const filtering = filter !== 'all' || needle !== '';
+  const matches = (p: SwitchPort) => {
+    if (filter === 'trunk' && p.mode !== 'trunk') return false;
+    if (filter === 'free' && (p.host || p.peer)) return false;
+    if (filter.startsWith('v:')) {
+      const v = Number(filter.slice(2));
+      if (p.mode === 'off' || (p.vlan !== v && !(p.mode === 'trunk' && p.tagged.includes(v)))) return false;
+    }
+    if (needle) {
+      const host = p.host ? addrs.get(p.host) : undefined;
+      const peer = p.peer ? switches?.find((x) => x.id === p.peer!.id) : undefined;
+      const hay = `${p.n} ${p.name} ${p.label} ${p.host ?? ''} ${host?.label ?? ''} ${host?.name ?? ''} ${peer?.name ?? ''}`.toLowerCase();
+      if (!hay.includes(needle)) return false;
+    }
+    return true;
+  };
 
   if (!switches) return <div className="loading">{t('Loading…')}</div>;
+  const portCount = switches.reduce((n, s) => n + s.ports.length, 0);
+  const usedCount = switches.reduce((n, s) => n + s.ports.filter((p) => p.host || p.peer).length, 0);
+  const shown = switches.map((sw) => ({ sw, ports: filtering ? sw.ports.filter(matches) : sw.ports })).filter((x) => !filtering || x.ports.length > 0);
   return (
-    <>
-      <div className="net-page two sw-page">
-        <aside className="lib-nav">
-          {groups.length === 0 && (
-            <div className="lib-nav-section">
-              <span className="grow">{t('Switches')}</span>
-              {editable && <NewButton onClick={() => setEditing('new')} />}
-            </div>
+    <main className="library">
+      <div className="library-inner full sw-page">
+        <div className="settings-head">
+          <div>
+            <h1>{t('Switches')}</h1>
+            <p className="muted">
+              {[tn(switches.length, '{n} switch', '{n} switches'), tn(portCount, '{n} port', '{n} ports'), tn(usedCount, '{n} used port', '{n} used ports')].join(' · ')}
+            </p>
+          </div>
+          <div className="spacer" />
+          {editable && (
+            <button className="btn primary" onClick={() => setEditing('new')}>
+              <Plus size={14} /> {t('New switch')}
+            </button>
           )}
-          {groups.map(([g, list], i) => (
-            <div key={g} className="sys-group">
-              <div className="lib-nav-section">
-                <span className="grow">{g || t('Switches')}</span>
-                {i === 0 && editable && <NewButton onClick={() => setEditing('new')} />}
+        </div>
+        {switches.length === 0 ? (
+          <Empty icon={EthernetPort} text={t('No switch')} />
+        ) : (
+          <>
+            <div className="media-toolbar">
+              <label className="search">
+                <Search size={14} />
+                <input value={q} placeholder={t('Port, label, machine')} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
+              </label>
+              <div className="asr-chips">
+                <button className={`asr-chip ${filter === 'all' ? 'on' : ''}`} onClick={() => setFilter('all')}>
+                  {t('All ports')}
+                </button>
+                {used.map((v) => {
+                  const x = vlanById(vlans, v);
+                  return (
+                    <button key={v} className={`asr-chip ${filter === `v:${v}` ? 'on' : ''}`} title={x?.subnet} onClick={() => setFilter(`v:${v}`)}>
+                      <span className="vlan-sw" style={vlanStyle(x)} />
+                      {x ? `${v} ${x.name}` : v}
+                    </button>
+                  );
+                })}
+                <button className={`asr-chip ${filter === 'trunk' ? 'on' : ''}`} onClick={() => setFilter('trunk')}>
+                  {t('Trunks')}
+                </button>
+                <button className={`asr-chip ${filter === 'free' ? 'on' : ''}`} onClick={() => setFilter('free')}>
+                  {tc('ports', 'Free')}
+                </button>
               </div>
-              {list.map((s) => (
-                <div
-                  key={s.id}
-                  className={`lib-nav-item ${s.id === sw?.id ? 'on' : ''}`}
-                  role="link"
-                  tabIndex={0}
-                  aria-current={s.id === sw?.id ? 'page' : undefined}
-                  onClick={() => navigate(`/switches/${s.id}`)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      navigate(`/switches/${s.id}`);
-                    }
-                  }}
-                >
-                  <EthernetPort size={15} />
-                  <span className="grow">{s.name}</span>
-                  <span className="count">{s.ports.length}</span>
-                </div>
+            </div>
+            {shown.length === 0 && <div className="empty">{t('No match')}</div>}
+            <div className="sw-list">
+              {shown.map(({ sw, ports }) => (
+                <SwitchSection
+                  key={sw.id}
+                  sw={sw}
+                  ports={ports}
+                  defaultOpen={switches.length <= 2 || switches[0].id === sw.id}
+                  focused={sw.id === id}
+                  switches={switches}
+                  vlans={vlans}
+                  addrs={addrs}
+                  agent={sw.snmp ? agents?.find((a) => a.id === sw.snmp) : undefined}
+                  hostOptions={hostOptions}
+                  peerOptions={peerOptions}
+                  editable={editable}
+                  ticked={ticked}
+                  onTick={(ns, on) => tick(sw, ns, on)}
+                  onPatch={(ns, set) => patch(sw, ns, set)}
+                  onEdit={() => setEditing(sw)}
+                />
               ))}
             </div>
-          ))}
-        </aside>
-        {sw ? (
-          <SwitchView key={sw.id} sw={sw} switches={switches} vlans={vlans} addrs={addrs} editable={editable} onEdit={() => setEditing(sw)} onChanged={replace} />
-        ) : (
-          <main className="library">
-            <Empty icon={EthernetPort} text={t('No switch')}>
-              {editable && (
-                <button className="btn primary" onClick={() => setEditing('new')}>
-                  <Plus size={14} /> {t('New switch')}
-                </button>
-              )}
-            </Empty>
-          </main>
+            {editable && ticked.size > 0 && <BulkBar switches={switches} vlans={vlans} ticked={ticked} onClear={() => setTicked(new Set())} onPatch={patch} />}
+          </>
         )}
       </div>
       {editing && (
         <SwitchModal
           sw={editing === 'new' ? null : editing}
           agents={agents}
-          groups={groups.map(([g]) => g).filter(Boolean)}
+          groups={[...new Set(switches.map((s) => s.group.trim()).filter(Boolean))].sort()}
           onClose={() => setEditing(null)}
           onSaved={(s) => {
             setEditing(null);
-            if (s) navigate(`/switches/${s.id}`);
+            navigate(s ? `/switches/${s.id}` : '/switches', !s);
           }}
         />
       )}
-    </>
+    </main>
   );
 }
 
-function NewButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button className="icon-btn ghost" style={{ width: 22, height: 22 }} title={t('New switch')} onClick={onClick}>
-      <Plus size={13} />
-    </button>
-  );
-}
+/* ---------- Un switch : en-tête, façade, légende, ports ---------- */
 
-/* ---------- Un switch : façade ou liste, port à droite ---------- */
-
-function SwitchView({
+function SwitchSection({
   sw,
+  ports,
+  defaultOpen,
+  focused,
   switches,
   vlans,
   addrs,
+  agent,
+  hostOptions,
+  peerOptions,
   editable,
+  ticked,
+  onTick,
+  onPatch,
   onEdit,
-  onChanged,
 }: {
   sw: Switch;
+  ports: SwitchPort[];
+  defaultOpen: boolean;
+  focused: boolean;
   switches: Switch[];
   vlans: Vlan[] | null;
   addrs: Map<string, Address>;
+  agent: SnmpAgent | undefined;
+  hostOptions: DropOption[];
+  peerOptions: (sw: Switch) => DropOption[];
   editable: boolean;
+  ticked: Set<string>;
+  onTick: (ns: number[], on: boolean) => void;
+  onPatch: (ns: number[], set: PortSet) => Promise<void>;
   onEdit: () => void;
-  onChanged: (s: Switch) => void;
 }) {
-  const [tab, setTab] = useState<'face' | 'list'>('face');
-  const [sel, setSel] = useState<number[]>([]);
+  const [open, setOpen] = useDisplayPref<boolean>(`switch.open.${sw.id}`, defaultOpen);
+  const [goto, setGoto] = useState<{ n: number; seq: number } | null>(null);
+  const ref = useRef<HTMLElement>(null);
   const copper = sw.ports.filter((p) => p.n <= sw.copper);
   const sfp = sw.ports.filter((p) => p.n > sw.copper);
   const blocks: SwitchPort[][] = [];
   for (let i = 0; i < copper.length; i += 12) blocks.push(copper.slice(i, i + 12));
+  const isTicked = (n: number) => ticked.has(key(sw.id, n));
 
-  const pick = (n: number, e: MouseEvent) => {
-    if (e.ctrlKey || e.metaKey || e.shiftKey) setSel((s) => (s.includes(n) ? s.filter((x) => x !== n) : [...s, n]));
-    else setSel([n]);
-  };
+  // Un switch dans l'adresse : l'ouvrir et l'amener en vue.
+  useEffect(() => {
+    if (!focused) return;
+    setOpen(true);
+    requestAnimationFrame(() => ref.current?.scrollIntoView({ block: 'start' }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focused]);
 
-  const patch = async (ports: number[], set: Partial<Record<keyof SwitchPort, unknown>>) => {
-    try {
-      onChanged(await api<Switch>('PATCH', `/api/switches/${sw.id}/ports`, { ports, set }));
-    } catch (e) {
-      fail(e);
-    }
+  // Un port choisi sur la façade : sa ligne en vue (une fois la section ouverte).
+  useEffect(() => {
+    if (!goto || !open) return;
+    document.getElementById(`port-${sw.id}-${goto.n}`)?.scrollIntoView({ block: 'nearest' });
+  }, [goto, open, sw.id]);
+
+  const pick = (n: number) => {
+    if (editable) onTick([n], !isTicked(n));
+    if (!open) setOpen(true);
+    setGoto((g) => ({ n, seq: (g?.seq ?? 0) + 1 }));
   };
 
   // Légende : ports par VLAN, trunks, libres.
@@ -173,7 +271,7 @@ function SwitchView({
     return { per: [...per.entries()].sort((a, b) => a[0] - b[0]), trunk, free };
   }, [sw.ports]);
 
-  const linked = (p: SwitchPort) => !!p.peer || (!!p.host && !!addrs.get(p.host)?.up);
+  const linked = (p: SwitchPort) => !!p.peer || (!!p.host && !!addrs.get(p.host)?.up) || p.learnt.length > 0 || !!p.lldp;
   const portTitle = (p: SwitchPort) => {
     const v = vlanById(vlans, p.vlan);
     const what = p.mode === 'off' ? t('disabled') : p.mode === 'trunk' ? t('trunk') : p.vlan !== undefined ? t('VLAN {id}', { id: p.vlan }) + (v ? ` ${v.name}` : '') : t('free');
@@ -183,310 +281,321 @@ function SwitchView({
     <button
       key={p.n}
       type="button"
-      className={`sw-port ${isSfp ? 'sfp' : ''} ${p.mode === 'trunk' ? 'trunk' : ''} ${p.mode === 'off' ? 'off' : ''} ${sel.includes(p.n) ? 'sel' : ''}`}
+      className={`sw-port ${isSfp ? 'sfp' : ''} ${p.mode === 'trunk' ? 'trunk' : ''} ${p.mode === 'off' ? 'off' : ''} ${isTicked(p.n) ? 'sel' : ''}`}
       style={p.mode !== 'off' ? vlanStyle(vlanById(vlans, p.vlan)) : undefined}
       title={portTitle(p)}
-      onClick={(e) => pick(p.n, e)}
+      onClick={() => pick(p.n)}
     >
       {p.n}
       {linked(p) && <span className="link" />}
     </button>
   );
 
-  const sub = [sw.model, sw.ip, sw.sfp ? t('{a} + {b} ports', { a: sw.copper, b: sw.sfp }) : tn(sw.copper, '{n} port', '{n} ports')].filter(Boolean);
+  const sub = [sw.model, sw.ip, sw.group, sw.sfp ? t('{a} + {b} ports', { a: sw.copper, b: sw.sfp }) : tn(sw.copper, '{n} port', '{n} ports')].filter(Boolean);
+  const vlanOptions: DropOption[] = [{ value: '', label: '—' }, ...(vlans ?? []).map((v) => ({ value: String(v.id), label: `${v.id} · ${v.name}`, icon: <span className="vlan-sw" style={vlanStyle(v)} /> }))];
+  const peers = open ? peerOptions(sw) : [];
+  const allTicked = ports.length > 0 && ports.every((p) => isTicked(p.n));
   return (
-    <>
-      <main className="library">
-        <div className="library-inner wide">
-          <div className="settings-head">
-            <div>
-              <h1>{sw.name}</h1>
-              <p className="muted">
-                {sub.map((s, i) => (
-                  <span key={i}>
-                    {i > 0 && ' · '}
-                    {s === sw.ip ? <span className="mono">{s}</span> : s}
-                  </span>
-                ))}
-              </p>
+    <section ref={ref} className={`sw-sec ${open ? '' : 'closed'}`}>
+      <header>
+        <button type="button" className="sw-twirl" title={open ? t('Fold the ports') : t('Unfold the ports')} aria-expanded={open} onClick={() => setOpen(!open)}>
+          <ChevronDown size={14} />
+        </button>
+        <div className="sw-title">
+          <h2>{sw.name}</h2>
+          <p className="muted">
+            {sub.map((s, i) => (
+              <span key={i}>
+                {i > 0 && ' · '}
+                {s === sw.ip ? <span className="mono">{s}</span> : s}
+              </span>
+            ))}
+          </p>
+        </div>
+        <div className="spacer" />
+        {agent && (
+          <span className={`badge ${agent.lastPoll && !agent.lastPoll.ok ? 'warn' : ''}`} title={agent.lastPoll?.message || agent.name}>
+            {agent.lastPoll ? t('SNMP · read {when}', { when: fmtSeen(agent.lastPoll.at) }) : t('SNMP')}
+          </span>
+        )}
+        {editable && (
+          <button type="button" className="btn small" onClick={onEdit}>
+            <Pencil size={13} /> {t('Edit')}
+          </button>
+        )}
+      </header>
+      <div className="sw-body">
+        <div className="sw-face">
+          {blocks.map((b, i) => (
+            <div key={i} className="sw-block">
+              {b.map((p) => face(p, false))}
             </div>
-            <div className="spacer" />
-            {editable && (
-              <button className="btn" onClick={onEdit}>
-                <Pencil size={14} /> {t('Edit')}
-              </button>
-            )}
-          </div>
-          <SubTabs
-            current={tab}
-            onPick={(v) => setTab(v as 'face' | 'list')}
-            items={[
-              { id: 'face', icon: <LayoutGrid size={14} />, label: t('Faceplate') },
-              { id: 'list', icon: <List size={14} />, label: t('List'), count: sw.ports.length },
-            ]}
-          />
-          {tab === 'face' ? (
-            <>
-              <div className="sw-face">
-                {blocks.map((b, i) => (
-                  <div key={i} className="sw-block">
-                    {b.map((p) => face(p, false))}
-                  </div>
-                ))}
-                {sfp.length > 0 && <div className="sw-sfp">{sfp.map((p) => face(p, true))}</div>}
-              </div>
-              <div className="sw-legend">
-                {legend.per.map(([id, n]) => {
-                  const v = vlanById(vlans, id);
-                  return (
-                    <span key={id}>
-                      <span className="vlan-sw" style={vlanStyle(v)} />
-                      {`${id}${v ? ` ${v.name}` : ''} · ${n}`}
-                    </span>
-                  );
-                })}
-                {legend.trunk > 0 && (
-                  <span>
-                    <span className="trunk-key" />
-                    {t('Trunk · {n}', { n: legend.trunk })}
-                  </span>
-                )}
-                {legend.free > 0 && (
-                  <span>
-                    <span className="vlan-sw" />
-                    {t('Free · {n}', { n: legend.free })}
-                  </span>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="card-table">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th className="num">{t('Port')}</th>
-                    <th>{t('Name')}</th>
-                    <th>{t('Label')}</th>
-                    <th>{t('Mode')}</th>
-                    <th>{t('VLAN')}</th>
-                    <th>{t('Tagged')}</th>
-                    <th>{t('Connected to')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sw.ports.map((p) => {
-                    const peer = p.peer ? switches.find((s) => s.id === p.peer!.id) : undefined;
-                    const host = p.host ? addrs.get(p.host) : undefined;
-                    return (
-                      <tr key={p.n} className={`${sel.includes(p.n) ? 'sel' : ''} ${p.mode === 'off' ? 'free' : ''}`} onClick={(e) => pick(p.n, e)}>
-                        <td className="num ip">{p.n}</td>
-                        <td className="ip">{p.name}</td>
-                        <td>{p.label}</td>
-                        <td>{modeLabel(p.mode)}</td>
-                        <td>{p.vlan !== undefined && p.mode !== 'off' ? <VlanTag vlan={vlanById(vlans, p.vlan)} id={p.vlan} /> : ''}</td>
-                        <td className="ip">{p.mode === 'trunk' ? p.tagged.join(', ') : ''}</td>
-                        <td>{peer ? `${peer.name} · ${peer.ports.find((x) => x.n === p.peer!.port)?.name ?? p.peer!.port}` : p.host ? `${displayName(host, p.host)}${host?.label || host?.name ? ` · ${p.host}` : ''}` : ''}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+          ))}
+          {sfp.length > 0 && <div className="sw-sfp">{sfp.map((p) => face(p, true))}</div>}
+        </div>
+        <div className="sw-legend">
+          {legend.per.map(([id, n]) => {
+            const v = vlanById(vlans, id);
+            return (
+              <span key={id}>
+                <span className="vlan-sw" style={vlanStyle(v)} />
+                {`${id}${v ? ` ${v.name}` : ''} · ${n}`}
+              </span>
+            );
+          })}
+          {legend.trunk > 0 && (
+            <span>
+              <span className="trunk-key" />
+              {t('Trunk · {n}', { n: legend.trunk })}
+            </span>
+          )}
+          {legend.free > 0 && (
+            <span>
+              <span className="vlan-sw" />
+              {t('Free · {n}', { n: legend.free })}
+            </span>
           )}
         </div>
-      </main>
-      {sel.length > 0 && <PortPanel key={sel.join(',')} sw={sw} ports={sw.ports.filter((p) => sel.includes(p.n))} switches={switches} vlans={vlans} addrs={addrs} editable={editable} onPatch={patch} onClose={() => setSel([])} />}
-    </>
+        {open && (
+          <table className="pt">
+            <colgroup>
+              {editable && <col style={{ width: 36 }} />}
+              <col style={{ width: 120 }} />
+              <col style={{ width: '17%' }} />
+              <col style={{ width: 156 }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '20%' }} />
+              <col />
+            </colgroup>
+            <thead>
+              <tr>
+                {editable && (
+                  <th>
+                    <input type="checkbox" className="tick" checked={allTicked} title={t('Tick all')} onChange={(e) => onTick(ports.map((p) => p.n), e.target.checked)} />
+                  </th>
+                )}
+                <th>{t('Port')}</th>
+                <th>{t('Label')}</th>
+                <th>{t('Mode')}</th>
+                <th>{t('Native VLAN')}</th>
+                <th>{t('Tagged VLANs')}</th>
+                <th>{t('Connected to')}</th>
+                <th>{t('MAC / LLDP')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ports.map((p) => (
+                <PortRow
+                  key={p.n}
+                  sw={sw}
+                  p={p}
+                  switches={switches}
+                  vlans={vlans}
+                  addrs={addrs}
+                  vlanOptions={vlanOptions}
+                  hostOptions={hostOptions}
+                  peerOptions={peers}
+                  editable={editable}
+                  ticked={isTicked(p.n)}
+                  onTick={(on) => onTick([p.n], on)}
+                  onPatch={(set) => onPatch([p.n], set)}
+                />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
   );
 }
 
 function modeLabel(m: PortMode): string {
-  return m === 'access' ? t('Access') : m === 'trunk' ? t('Trunk') : t('Disabled');
+  return m === 'access' ? t('Access') : m === 'trunk' ? t('Trunk') : tc('mode', 'Off');
 }
 
-function PortPanel({
+const modeOptions = () => [
+  { value: 'access' as PortMode, label: t('Access') },
+  { value: 'trunk' as PortMode, label: t('Trunk') },
+  { value: 'off' as PortMode, label: tc('mode', 'Off') },
+];
+
+function PortRow({
   sw,
-  ports,
+  p,
   switches,
   vlans,
   addrs,
+  vlanOptions,
+  hostOptions,
+  peerOptions,
   editable,
+  ticked,
+  onTick,
   onPatch,
-  onClose,
 }: {
   sw: Switch;
-  ports: SwitchPort[];
+  p: SwitchPort;
   switches: Switch[];
   vlans: Vlan[] | null;
   addrs: Map<string, Address>;
+  vlanOptions: DropOption[];
+  hostOptions: DropOption[];
+  peerOptions: DropOption[];
   editable: boolean;
-  onPatch: (ports: number[], set: Partial<Record<keyof SwitchPort, unknown>>) => Promise<void>;
-  onClose: () => void;
+  ticked: boolean;
+  onTick: (on: boolean) => void;
+  onPatch: (set: PortSet) => Promise<void>;
 }) {
-  const p = ports[0];
-  const one = ports.length === 1;
-  const ns = ports.map((x) => x.n);
-  const same = <T,>(f: (x: SwitchPort) => T) => (ports.every((x) => f(x) === f(p)) ? f(p) : undefined);
-  const mode = same((x) => x.mode);
-  const vlan = same((x) => x.vlan);
-  const [peerSw, setPeerSw] = useState(p.peer?.id ?? '');
-  const peer = switches.find((s) => s.id === peerSw);
+  const vlan = vlanById(vlans, p.vlan);
+  const peerSw = p.peer ? switches.find((x) => x.id === p.peer!.id) : undefined;
   const host = p.host ? addrs.get(p.host) : undefined;
-  const mm = one && p.host ? vlanMismatch(vlans, p, p.host) : null;
+  const linkValue = p.peer ? `peer:${p.peer.id}:${p.peer.port}` : p.host ? `host:${p.host}` : null;
+  const linkText = p.peer
+    ? `${peerSw?.name ?? p.peer.id} · ${peerSw?.ports.find((x) => x.n === p.peer!.port)?.name || p.peer.port}`
+    : p.host
+      ? `${displayName(host, p.host)}${host?.label || host?.name ? ` · ${p.host}` : ''}`
+      : '';
 
-  const vlanOptions: DropOption[] = [{ value: '', label: '—' }, ...(vlans ?? []).map((v) => ({ value: String(v.id), label: `${v.id} · ${v.name}`, icon: <span className="vlan-sw" style={vlanStyle(v)} /> }))];
-  const hostOptions: DropOption[] = [
-    { value: '', label: '—' },
-    ...[...addrs.values()]
-      .filter((a) => a.up || a.label || a.ip === p.host)
-      .sort((a, b) => byIp(a.ip, b.ip))
-      .map((a) => {
-        const I = KIND_ICON[a.kind ?? 'other'];
-        return { value: a.ip, label: displayName(a, a.ip), detail: a.ip, icon: <I size={12} /> };
-      }),
-  ];
-  if (p.host && !addrs.has(p.host)) hostOptions.push({ value: p.host, label: p.host });
-  const swOptions: DropOption[] = [{ value: '', label: '—' }, ...switches.filter((s) => s.id !== sw.id).map((s) => ({ value: s.id, label: s.name, detail: s.ip }))];
-  const peerPorts: DropOption[] = (peer?.ports ?? []).map((x) => ({ value: String(x.n), label: x.name || String(x.n), note: x.label || undefined }));
-  const tagged = (id: number) => ports.every((x) => x.tagged.includes(id));
+  let links: DropOption[] = [];
+  if (editable) {
+    links = [{ value: '', label: '—' }, ...hostOptions, ...peerOptions];
+    if (p.host && !hostOptions.some((o) => o.value === linkValue)) links.splice(1, 0, { value: `host:${p.host}`, label: p.host, group: t('Machines') });
+  }
+  const link = (v: string) => {
+    if (!v) return void onPatch({ host: null, peer: null });
+    const [kind, a, b] = v.split(':');
+    if (kind === 'host') void onPatch({ host: a, peer: null });
+    else void onPatch({ peer: { id: a, port: Number(b) }, host: null });
+  };
+
+  const addable = (vlans ?? []).filter((v) => !p.tagged.includes(v.id)).map((v) => ({ value: String(v.id), label: `${v.id} · ${v.name}`, icon: <span className="vlan-sw" style={vlanStyle(v)} /> }));
+  const learnt = p.lldp ? t('LLDP: {name} {port}', { name: p.lldp.name, port: p.lldp.port }) : p.learnt.length ? p.learnt[0] + (p.learnt.length > 1 ? ` +${p.learnt.length - 1}` : '') : '';
+  return (
+    <tr id={`port-${sw.id}-${p.n}`} className={`${ticked ? 'sel' : ''} ${p.mode === 'off' ? 'off' : ''}`} style={p.mode !== 'off' ? vlanStyle(vlan) : undefined}>
+      {editable && (
+        <td>
+          <input type="checkbox" className="tick" checked={ticked} aria-label={p.name || String(p.n)} onChange={(e) => onTick(e.target.checked)} />
+        </td>
+      )}
+      <td>
+        <b className="ip">{p.n}</b> <span className="ip muted2">{p.name}</span>
+      </td>
+      <td>
+        <InlineText value={p.label} placeholder={t('Label')} editable={editable} onSave={(label) => void onPatch({ label })} />
+      </td>
+      <td>{editable ? <Segmented value={p.mode} options={modeOptions()} onChange={(mode) => void onPatch({ mode })} /> : modeLabel(p.mode)}</td>
+      <td>
+        {p.mode !== 'off' &&
+          (editable ? (
+            <Dropdown className="cell" value={p.vlan === undefined ? '' : String(p.vlan)} options={vlanOptions} onChange={(v) => void onPatch({ vlan: v ? Number(v) : null })} />
+          ) : (
+            p.vlan !== undefined && (
+              <span className="cell-kind">
+                <span className="vlan-sw" style={vlanStyle(vlan)} />
+                {vlan ? `${p.vlan} · ${vlan.name}` : p.vlan}
+              </span>
+            )
+          ))}
+      </td>
+      <td>
+        {p.mode === 'trunk' && (
+          <div className="tagged">
+            {p.tagged.map((id) => {
+              const v = vlanById(vlans, id);
+              return (
+                <span key={id} className="vlan-tag" style={vlanStyle(v)} title={v?.name}>
+                  <span className="vlan-sw" />
+                  <b>{id}</b>
+                  {v?.name ? ` ${v.name}` : null}
+                  {editable && (
+                    <button type="button" className="tag-x" title={t('Remove')} onClick={() => void onPatch({ tagged: p.tagged.filter((x) => x !== id) })}>
+                      <X size={10} />
+                    </button>
+                  )}
+                </span>
+              );
+            })}
+            {editable && addable.length > 0 && (
+              <Dropdown className="add" value={null} placeholder="+" title={t('Add a VLAN')} options={addable} onChange={(v) => void onPatch({ tagged: [...p.tagged, Number(v)].sort((a, b) => a - b) })} />
+            )}
+          </div>
+        )}
+      </td>
+      <td>
+        {editable ? (
+          (linkValue || p.mode !== 'off') && <Dropdown className="cell" value={linkValue} placeholder={t('Connect…')} options={links} onChange={link} />
+        ) : (
+          <span className="cell-text">{linkText}</span>
+        )}
+      </td>
+      <td>
+        <span className="learnt" title={p.learnt.join('\n') || undefined}>
+          {learnt}
+        </span>
+      </td>
+    </tr>
+  );
+}
+
+/* ---------- Ports cochés : une barre pour tous les changer ---------- */
+
+function BulkBar({
+  switches,
+  vlans,
+  ticked,
+  onClear,
+  onPatch,
+}: {
+  switches: Switch[];
+  vlans: Vlan[] | null;
+  ticked: Set<string>;
+  onClear: () => void;
+  onPatch: (sw: Switch, ports: number[], set: PortSet) => Promise<void>;
+}) {
+  const [mode, setMode] = useState<PortMode | null>(null);
+  const [vlan, setVlan] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const groups = switches.map((sw) => ({ sw, ports: sw.ports.filter((p) => ticked.has(key(sw.id, p.n))) })).filter((g) => g.ports.length > 0);
+  const several = groups.length > 1;
+  const names = groups.flatMap((g) => g.ports.map((p) => (several ? `${g.sw.name} ${p.name || p.n}` : p.name || String(p.n)))).join(', ');
+  const vlanOptions: DropOption[] = (vlans ?? []).map((v) => ({ value: String(v.id), label: `${v.id} · ${v.name}`, icon: <span className="vlan-sw" style={vlanStyle(v)} /> }));
+
+  const apply = async () => {
+    const set: PortSet = {};
+    if (mode) set.mode = mode;
+    if (vlan !== null) set.vlan = Number(vlan);
+    setBusy(true);
+    for (const g of groups)
+      await onPatch(
+        g.sw,
+        g.ports.map((p) => p.n),
+        set,
+      );
+    setBusy(false);
+    setMode(null);
+    setVlan(null);
+    onClear();
+  };
 
   return (
-    <aside className="panel right">
-      <div className="host-head">
-        <span className="host-ico">
-          <EthernetPort size={18} />
-        </span>
-        <div>
-          <b>{one ? t('Port {n}', { n: p.n }) : tn(ports.length, '{n} port', '{n} ports')}</b>
-          <span className="ip">{one ? p.name : ports.map((x) => x.n).join(', ')}</span>
-        </div>
-        <button className="icon-btn ghost" title={t('Close')} onClick={onClose}>
-          <X size={14} />
-        </button>
-      </div>
-      <section className="insp-section">
-        <header>
-          <span>{t('Port')}</span>
-        </header>
-        <div className="insp-body">
-          {one && (
-            <div className="prop-row">
-              <span className="prop-label">{t('Label')}</span>
-              <TextInput value={p.label} commitOnBlur disabled={!editable} onChange={(v) => v !== p.label && void onPatch(ns, { label: v })} />
-            </div>
-          )}
-          <div className="prop-row">
-            <span className="prop-label">{t('Mode')}</span>
-            <Segmented
-              value={(mode ?? '') as PortMode}
-              onChange={(m) => editable && void onPatch(ns, { mode: m })}
-              options={[
-                { value: 'access', label: t('Access'), disabled: !editable },
-                { value: 'trunk', label: t('Trunk'), disabled: !editable },
-                { value: 'off', label: t('Disabled'), disabled: !editable },
-              ]}
-            />
-          </div>
-          {mode !== 'off' && (
-            <div className="prop-row">
-              <span className="prop-label">{mode === 'trunk' ? t('Native VLAN') : t('VLAN')}</span>
-              <Dropdown value={vlan === undefined ? (ports.some((x) => x.vlan !== undefined) ? null : '') : String(vlan)} options={vlanOptions} disabled={!editable} onChange={(v) => void onPatch(ns, { vlan: v ? Number(v) : null })} />
-            </div>
-          )}
-        </div>
-      </section>
-      {mode === 'trunk' && (
-        <section className="insp-section">
-          <header>
-            <span>{t('Tagged VLANs')}</span>
-          </header>
-          <div className="insp-body">
-            <div className="chip-pick">
-              {(vlans ?? []).map((v) => {
-                const on = tagged(v.id);
-                return (
-                  <button
-                    key={v.id}
-                    type="button"
-                    className={`asr-chip ${on ? 'on' : ''}`}
-                    disabled={!editable}
-                    aria-pressed={on}
-                    title={v.name}
-                    onClick={() => {
-                      for (const x of ports) {
-                        const list = on ? x.tagged.filter((y) => y !== v.id) : [...new Set([...x.tagged, v.id])].sort((a, b) => a - b);
-                        void onPatch([x.n], { tagged: list });
-                      }
-                    }}
-                  >
-                    <span className="vlan-sw" style={vlanStyle(v)} />
-                    {v.id}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </section>
-      )}
-      {one && (
-        <section className="insp-section">
-          <header>
-            <span>{t('Connected to')}</span>
-          </header>
-          <div className="insp-body">
-            <div className="prop-row">
-              <span className="prop-label">{t('Machine')}</span>
-              <Dropdown value={p.host ?? ''} options={hostOptions} disabled={!editable} onChange={(v) => void onPatch(ns, { host: v || null })} />
-            </div>
-            {p.host && (host?.label || host?.name || mm) && (
-              <div className="prop-row">
-                <span className="prop-label">{t('IP')}</span>
-                <span className="prop-val ip">{p.host}</span>
-                {mm && (
-                  <span className="badge warn" title={t('Outside the subnet of VLAN {id} ({subnet})', { id: mm.id, subnet: mm.subnet ?? '' })}>
-                    {t('VLAN')}
-                  </span>
-                )}
-              </div>
-            )}
-            <div className="prop-row">
-              <span className="prop-label">{t('Switch')}</span>
-              <Dropdown
-                value={peerSw}
-                options={swOptions}
-                disabled={!editable}
-                onChange={(v) => {
-                  setPeerSw(v);
-                  if (!v) void onPatch(ns, { peer: null });
-                }}
-              />
-            </div>
-            {peerSw && (
-              <div className="prop-row">
-                <span className="prop-label">{t('Its port')}</span>
-                <Dropdown value={p.peer?.id === peerSw ? String(p.peer.port) : null} options={peerPorts} disabled={!editable} onChange={(v) => void onPatch(ns, { peer: { id: peerSw, port: Number(v) } })} />
-              </div>
-            )}
-            <div className="prop-row">
-              <span className="prop-label">{t('MACs seen')}</span>
-              {p.learnt.length === 0 ? (
-                <span className="prop-val">—</span>
-              ) : (
-                <div className="prop-val lldp-list">
-                  {p.learnt.map((m) => (
-                    <span key={m}>{m}</span>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="prop-row">
-              <span className="prop-label">{t('LLDP')}</span>
-              <span className="prop-val">{p.lldp ? `${p.lldp.name} · ${p.lldp.port}` : '—'}</span>
-            </div>
-          </div>
-        </section>
-      )}
-    </aside>
+    <div className="bulk">
+      <b>{tn(ticked.size, '{n} ticked port', '{n} ticked ports')}</b>
+      <span className="muted bulk-names" title={names}>
+        {names}
+      </span>
+      <div className="spacer" />
+      <span className="muted">{t('Mode')}</span>
+      <Segmented value={mode ?? ('' as PortMode)} options={modeOptions()} onChange={setMode} />
+      <span className="muted">{t('VLAN')}</span>
+      <Dropdown value={vlan} options={vlanOptions} onChange={setVlan} />
+      <button type="button" className="btn ghost" onClick={onClear}>
+        {t('Untick')}
+      </button>
+      <button type="button" className="btn primary" disabled={busy || (!mode && vlan === null)} onClick={() => void apply()}>
+        <Check size={14} /> {t('Apply')}
+      </button>
+    </div>
   );
 }
 

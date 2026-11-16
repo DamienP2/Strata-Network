@@ -14,6 +14,7 @@ const General = lazy(() => import('../settings/Settings').then((m) => ({ default
 const Updates = lazy(() => import('../settings/Updates').then((m) => ({ default: m.Updates })));
 const History = lazy(() => import('../settings/History').then((m) => ({ default: m.History })));
 const Snmp = lazy(() => import('../settings/Snmp').then((m) => ({ default: m.Snmp })));
+const Vlans = lazy(() => import('./Vlans').then((m) => ({ default: m.Vlans })));
 const Maintenance = lazy(() => import('../settings/Settings').then((m) => ({ default: m.Maintenance })));
 
 export function SystemPage({ section, sub }: { section?: string; sub?: string }) {
@@ -49,6 +50,7 @@ export function SystemPage({ section, sub }: { section?: string; sub?: string })
         {current.id === 'updates' && <Updates />}
         {current.id === 'maintenance' && <Maintenance />}
         {current.id === 'history' && <History />}
+        {current.id === 'vlans' && <Vlans />}
         {current.id === 'snmp' && <Snmp />}
       </Suspense>
     </SidePage>

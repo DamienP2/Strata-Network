@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   AudioLines,
@@ -31,7 +31,7 @@ export function fail(e: unknown) {
 }
 
 /** Une liste du serveur, rechargée quand le serveur signale un changement de `what`. */
-export function useList<T>(what: string, path: string | null): [T | null, () => Promise<void>, (v: T | null) => void] {
+export function useList<T>(what: string, path: string | null): [T | null, () => Promise<void>, Dispatch<SetStateAction<T | null>>] {
   const [data, setData] = useState<T | null>(null);
   const load = useCallback(async () => {
     if (!path) return;

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { PageGuard } from './ui/PageGuard';
 import { useShallow } from 'zustand/react/shallow';
-import { Bell, EthernetPort, Layers, LayoutGrid, ListTree, Radar, Radio, Server, type LucideIcon } from 'lucide-react';
+import { Bell, EthernetPort, LayoutGrid, ListTree, Radar, Radio, Server, type LucideIcon } from 'lucide-react';
 import { t, tn, useLang } from './i18n';
 import { can, needsLook, useApp, type PublicUser } from './store';
 import { navigate, useRoute, type Route } from './router';
@@ -21,7 +21,6 @@ import { Empty } from './ui/Empty';
 import { useUnseenAlerts } from './net/model';
 
 const Scan = lazy(() => import('./pages/Scan').then((m) => ({ default: m.Scan })));
-const Vlans = lazy(() => import('./pages/Vlans').then((m) => ({ default: m.Vlans })));
 const Switches = lazy(() => import('./pages/Switches').then((m) => ({ default: m.Switches })));
 const Multicast = lazy(() => import('./pages/Multicast').then((m) => ({ default: m.Multicast })));
 const Topology = lazy(() => import('./pages/Topology').then((m) => ({ default: m.Topology })));
@@ -44,7 +43,6 @@ interface MainPage {
 const all = () => true;
 const MAIN_PAGES: MainPage[] = [
   { page: 'scan', path: '/scan', icon: Radar, label: () => t('Scan'), visible: all, render: (r) => (r.page === 'scan' ? <Scan networkId={r.networkId} ip={r.ip} /> : null) },
-  { page: 'vlans', path: '/vlans', icon: Layers, label: () => t('VLAN'), visible: all, render: () => <Vlans /> },
   { page: 'switches', path: '/switches', icon: EthernetPort, label: () => t('Switches'), visible: all, render: (r) => (r.page === 'switches' ? <Switches id={r.id} /> : null) },
   { page: 'multicast', path: '/multicast', icon: Radio, label: () => t('Multicast'), visible: all, render: () => <Multicast /> },
   { page: 'topology', path: '/topology', icon: ListTree, label: () => t('Topology'), visible: all, render: () => <Topology /> },

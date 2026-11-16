@@ -1,39 +1,23 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Crosshair, Ellipsis, FileDown, FileUp, LayoutGrid, List, LoaderCircle, Network as NetworkIcon, Pencil, Plus, Radar, RefreshCw, Save, Search, Square, Trash2, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Bookmark, ChevronDown, Crosshair, Ellipsis, Eye, FileDown, FileUp, LayoutGrid, List, LoaderCircle, Network as NetworkIcon, Pencil, Plus, Radar, RefreshCw, Save, Search, Square, Trash2, X } from 'lucide-react';
 import { t, tc, tn } from '../i18n';
 import { api, can, serverEvents, useApp, useChanged } from '../store';
 import { navigate } from '../router';
 import { Field } from '../settings/ui';
-import { Check, Segmented, TextInput } from '../ui/fields';
+import { Segmented } from '../ui/fields';
 import { Dropdown, type DropOption } from '../ui/Dropdown';
 import { confirmDialog } from '../ui/dialogs';
 import { openContextMenu, type MenuEntry } from '../ui/ContextMenu';
 import { Empty } from '../ui/Empty';
-import { fmtDate } from '../ui/format';
 import { useDisplayPref } from '../displayPrefs';
 import { intToIp, ipToInt, parseRange, validIp, type Range } from '../net/ip';
-import {
-  KIND_ICON,
-  KINDS,
-  copyText,
-  displayName,
-  fail,
-  fmtMs,
-  fmtSeen,
-  hasWeb,
-  ipState,
-  kindLabel,
-  portOf,
-  useList,
-  vlanById,
-  vlanMismatch,
-  type IpState,
-} from '../net/model';
-import { PortChip, PortChips, VlanTag, vlanStyle } from '../net/parts';
-import type { Address, Kind, Network, Switch, Vlan } from '../net/types';
+import { KIND_ICON, KINDS, copyText, fail, fmtMs, fmtSeen, hasWeb, ipState, kindLabel, useList, vlanById, vlanMismatch, type IpState } from '../net/model';
+import { InlineText, PortChips, vlanStyle } from '../net/parts';
+import type { Address, Kind, Network, Switch, SwitchPort, Vlan } from '../net/types';
 
 type Chip = 'all' | 'used' | 'free' | 'offline' | 'web' | 'new' | 'watched';
-const ROW = 29;
+const ROW = 32;
 
 export function Scan({ networkId, ip }: { networkId?: string; ip?: string }) {
   const user = useApp((s) => s.auth?.user);
@@ -161,7 +145,7 @@ function scheduleText(mins: number): string {
   return t('Planned scan: {time}', { time: mins >= 60 ? t('{n} h', { n: mins / 60 }) : t('{n} min', { n: mins }) });
 }
 
-/* ---------- Un réseau : liste ou plan, fiche à droite ---------- */
+/* ---------- Un réseau : liste ou fiches, tout se modifie dans le tableau ---------- */
 
 function NetworkView({ net, vlans, switches, editable, ip }: { net: Network; vlans: Vlan[] | null; switches: Switch[] | null; editable: boolean; ip?: string }) {
   const toast = useApp((s) => s.toast);
@@ -290,19 +274,22 @@ function NetworkView({ net, vlans, switches, editable, ip }: { net: Network; vla
     return out;
   }, [range, addrs, q, chip]);
 
+  const patch = useCallback(
+    async (ipText: string, body: Record<string, unknown>) => {
+      try {
+        put(await api<Address>('PATCH', `/api/addresses/${ipText}`, body));
+      } catch (e) {
+        fail(e);
+      }
+    },
+    [put],
+  );
+
   const select = (n: number | null) => {
     setSel(n);
     if (n === null) return;
     const a = addrs?.get(n);
     if (a?.isNew) void patch(intToIp(n), { isNew: false }); // permis à tous
-  };
-
-  const patch = async (ipText: string, body: Record<string, unknown>) => {
-    try {
-      put(await api<Address>('PATCH', `/api/addresses/${ipText}`, body));
-    } catch (e) {
-      fail(e);
-    }
   };
 
   const start = async () => {
@@ -361,129 +348,123 @@ function NetworkView({ net, vlans, switches, editable, ip }: { net: Network; vla
     openContextMenu({ clientX: r.right - 200, clientY: r.bottom + 6 }, items);
   };
 
-  const selIp = sel === null ? null : intToIp(sel);
   const pct = progress && progress.total ? (progress.done / progress.total) * 100 : 0;
   return (
-    <>
-      <main className="library">
-        <div className={`library-inner wide ${view === 'list' ? 'fill' : ''}`}>
-          <div className="settings-head">
-            <div>
-              <h1>{net.name}</h1>
-              <p className="muted">
-                <span className="mono">{net.range}</span>
-                {net.gateway && (
-                  <>
-                    {' · '}
-                    {t('gateway')} <span className="mono">{net.gateway}</span>
-                  </>
-                )}
-                {addrs && ` · ${tn(counts.used, '{n} used IP', '{n} used IPs')} · ${tn(counts.free, '{n} free IP', '{n} free IPs')}`}
-              </p>
-            </div>
-            <div className="spacer" />
-            {progress && (
-              <div className="scan-run">
-                <LoaderCircle size={14} className="spin" /> {progress.done} / {progress.total}
-                <span className="perf-bar">
-                  <span className="perf-bar-track">
-                    <span className="perf-bar-fill" style={{ transform: `translateX(${pct - 100}%)` }} />
-                  </span>
+    <main className="library">
+      <div className={`library-inner full ${view === 'list' ? 'fill' : ''}`}>
+        <div className="settings-head">
+          <div>
+            <h1>{net.name}</h1>
+            <p className="muted">
+              <span className="mono">{net.range}</span>
+              {net.gateway && (
+                <>
+                  {' · '}
+                  {t('gateway')} <span className="mono">{net.gateway}</span>
+                </>
+              )}
+              {addrs && ` · ${tn(counts.used, '{n} used IP', '{n} used IPs')} · ${tn(counts.free, '{n} free IP', '{n} free IPs')}`}
+            </p>
+          </div>
+          <div className="spacer" />
+          {progress && (
+            <div className="scan-run">
+              <LoaderCircle size={14} className="spin" /> {progress.done} / {progress.total}
+              <span className="perf-bar">
+                <span className="perf-bar-track">
+                  <span className="perf-bar-fill" style={{ transform: `translateX(${pct - 100}%)` }} />
                 </span>
-              </div>
-            )}
-            <button className="btn" onClick={() => void nextFree()}>
-              <Crosshair size={14} /> {t('Next free IP')}
-            </button>
-            {editable &&
-              (progress ? (
-                <button className="btn" onClick={() => void stop()}>
-                  <Square size={14} /> {t('Stop')}
-                </button>
-              ) : (
-                <button className="btn primary" onClick={() => void start()}>
-                  <Radar size={14} /> {tc('verb', 'Scan')}
-                </button>
-              ))}
-            <button className="icon-btn" title={t('More actions')} onClick={menu}>
-              <Ellipsis size={14} />
-            </button>
-            <input
-              ref={file}
-              className="file-hidden"
-              type="file"
-              accept=".csv,text/csv"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                e.target.value = '';
-                if (f) void importCsv(f);
-              }}
-            />
-          </div>
-
-          {addrs && range && <Occupancy range={range} addrs={addrs} counts={counts} sel={sel} onSel={select} />}
-
-          <div className="media-toolbar">
-            <label className="search">
-              <Search size={14} />
-              <input value={q} placeholder={t('Search an IP, a name, a MAC')} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
-            </label>
-            <div className="asr-chips">
-              {(
-                [
-                  ['all', t('All addresses'), counts.all],
-                  ['used', tc('ips', 'Used'), counts.used],
-                  ['free', tc('ips', 'Free'), counts.free],
-                  ['offline', tc('ips', 'Offline'), counts.offline],
-                  ['web', t('Web'), counts.web],
-                  ['new', tc('ips', 'New'), counts.new],
-                  ['watched', tc('ips', 'Watched'), counts.watched],
-                ] as [Chip, string, number][]
-              ).map(([id, label, n]) => (
-                <button key={id} className={`asr-chip ${chip === id ? 'on' : ''}`} onClick={() => setChip(id)}>
-                  {label} <span className="asr-chip-n">{n}</span>
-                </button>
-              ))}
+              </span>
             </div>
-            <div className="spacer" />
-            <Segmented
-              value={view === 'tiles' ? 'tiles' : 'list'}
-              onChange={setView}
-              options={[
-                { value: 'list', label: <List size={14} />, title: t('List') },
-                { value: 'tiles', label: <LayoutGrid size={14} />, title: t('Cards') },
-              ]}
-            />
-          </div>
-
-          {!addrs || !range ? (
-            <div className="loading">{t('Loading…')}</div>
-          ) : view === 'tiles' ? (
-            <IpTiles rows={rows} addrs={addrs} gw={gw} sel={sel} onSel={select} />
-          ) : (
-            <IpTable rows={rows} addrs={addrs} sel={sel} onSel={select} vlans={vlans} switches={switches} editable={editable} onLabel={(n, label) => void patch(intToIp(n), { label })} />
           )}
+          <button className="btn" onClick={() => void nextFree()}>
+            <Crosshair size={14} /> {t('Next free IP')}
+          </button>
+          {editable &&
+            (progress ? (
+              <button className="btn" onClick={() => void stop()}>
+                <Square size={14} /> {t('Stop')}
+              </button>
+            ) : (
+              <button className="btn primary" onClick={() => void start()}>
+                <Radar size={14} /> {tc('verb', 'Scan')}
+              </button>
+            ))}
+          <button className="icon-btn" title={t('More actions')} onClick={menu}>
+            <Ellipsis size={14} />
+          </button>
+          <input
+            ref={file}
+            className="file-hidden"
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) void importCsv(f);
+            }}
+          />
         </div>
-      </main>
-      {selIp && (
-        <HostPanel
-          key={selIp}
-          ip={selIp}
-          a={addrs?.get(sel!)}
-          vlans={vlans}
-          switches={switches}
-          addrs={addrs}
-          editable={editable}
-          onPatch={(body) => void patch(selIp, body)}
-          onPut={put}
-          onClose={() => setSel(null)}
-        />
-      )}
-    </>
+
+        {addrs && range && <Occupancy range={range} addrs={addrs} counts={counts} sel={sel} onSel={select} />}
+
+        <div className="media-toolbar">
+          <label className="search">
+            <Search size={14} />
+            <input value={q} placeholder={t('Search an IP, a name, a MAC')} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
+          </label>
+          <div className="asr-chips">
+            {(
+              [
+                ['all', t('All addresses'), counts.all],
+                ['used', tc('ips', 'Used'), counts.used],
+                ['free', tc('ips', 'Free'), counts.free],
+                ['offline', tc('ips', 'Offline'), counts.offline],
+                ['web', t('Web'), counts.web],
+                ['new', tc('ips', 'New'), counts.new],
+                ['watched', tc('ips', 'Watched'), counts.watched],
+              ] as [Chip, string, number][]
+            ).map(([id, label, n]) => (
+              <button key={id} className={`asr-chip ${chip === id ? 'on' : ''}`} onClick={() => setChip(id)}>
+                {label} <span className="asr-chip-n">{n}</span>
+              </button>
+            ))}
+          </div>
+          <div className="spacer" />
+          <Segmented
+            value={view === 'tiles' ? 'tiles' : 'list'}
+            onChange={setView}
+            options={[
+              { value: 'list', label: <List size={14} />, title: t('List') },
+              { value: 'tiles', label: <LayoutGrid size={14} />, title: t('Cards') },
+            ]}
+          />
+        </div>
+
+        {!addrs || !range ? (
+          <div className="loading">{t('Loading…')}</div>
+        ) : view === 'tiles' ? (
+          <IpTiles
+            rows={rows}
+            addrs={addrs}
+            gw={gw}
+            sel={sel}
+            onSel={(n) => {
+              select(n);
+              setView('list');
+            }}
+          />
+        ) : (
+          <IpTable rows={rows} addrs={addrs} sel={sel} onSel={select} vlans={vlans} switches={switches} editable={editable} onPatch={patch} onPut={put} />
+        )}
+      </div>
+    </main>
   );
 }
 
 /* ---------- Liste : une ligne par adresse, seules les lignes visibles sont dessinées ---------- */
+
+type Plug = { sw: Switch; port: SwitchPort };
 
 function IpTable({
   rows,
@@ -493,7 +474,8 @@ function IpTable({
   vlans,
   switches,
   editable,
-  onLabel,
+  onPatch,
+  onPut,
 }: {
   rows: number[];
   addrs: Map<number, Address>;
@@ -502,11 +484,15 @@ function IpTable({
   vlans: Vlan[] | null;
   switches: Switch[] | null;
   editable: boolean;
-  onLabel: (n: number, label: string) => void;
+  onPatch: (ip: string, body: Record<string, unknown>) => Promise<void>;
+  onPut: (a: Address) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [top, setTop] = useState(0);
   const [height, setHeight] = useState(900);
+  const [pop, setPop] = useState<{ n: number; el: HTMLElement } | null>(null);
+  const [scanning, setScanning] = useState<Set<number>>(() => new Set());
+  const clicked = useRef<number | null>(null);
 
   useLayoutEffect(() => {
     const el = box.current;
@@ -517,10 +503,14 @@ function IpTable({
     return () => ro.disconnect();
   }, []);
 
-  // Une adresse choisie ailleurs (alerte, prochaine IP libre) : la faire défiler en vue.
+  // Une adresse choisie ailleurs (bandeau, fiche, alerte, prochaine IP libre) : la faire défiler en vue.
   useEffect(() => {
     const el = box.current;
     if (!el || sel === null) return;
+    if (clicked.current === sel) {
+      clicked.current = null; // une ligne cliquée est déjà en vue
+      return;
+    }
     const i = rows.indexOf(sel);
     if (i < 0) return;
     const y = i * ROW;
@@ -528,82 +518,172 @@ function IpTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sel]);
 
+  // Où chaque machine est branchée (le port qui la déclare).
+  const hosts = useMemo(() => {
+    const m = new Map<string, Plug>();
+    for (const sw of switches ?? []) for (const port of sw.ports) if (port.host && !m.has(port.host)) m.set(port.host, { sw, port });
+    return m;
+  }, [switches]);
+  const plugOf = (a: Address | undefined, ip: string): Plug | null => {
+    if (a?.switch) {
+      const sw = switches?.find((s) => s.id === a.switch!.id);
+      const port = sw?.ports.find((p) => p.n === a.switch!.port);
+      if (sw && port) return { sw, port };
+    }
+    return hosts.get(ip) ?? null;
+  };
+
+  const kinds: DropOption<Kind | ''>[] = useMemo(() => [{ value: '', label: '—' }, ...KINDS.map((k) => ({ value: k, label: kindLabel(k), icon: iconOf(k) }))], []);
+
+  const rescan = async (n: number) => {
+    setScanning((s) => new Set(s).add(n));
+    try {
+      onPut(await api<Address>('POST', `/api/addresses/${intToIp(n)}/scan`));
+    } catch (e) {
+      fail(e);
+    }
+    setScanning((s) => {
+      const x = new Set(s);
+      x.delete(n);
+      return x;
+    });
+  };
+
+  const cols = editable ? 9 : 8;
   const from = Math.max(0, Math.floor(top / ROW) - 8);
   const to = Math.min(rows.length, Math.ceil((top + height) / ROW) + 8);
+  const popAddr = pop ? addrs.get(pop.n) : undefined;
   return (
     <div className="card-table fill" ref={box} onScroll={(e) => setTop(e.currentTarget.scrollTop)}>
-      <table className="data-table ip-rows">
+      <table className="xt">
         <colgroup>
-          <col style={{ width: 112 }} />
-          <col style={{ width: 190 }} />
-          <col style={{ width: '17%' }} />
-          <col style={{ width: '17%' }} />
-          <col style={{ width: '12%' }} />
+          <col style={{ width: 46 }} />
+          <col style={{ width: 176 }} />
+          <col style={{ width: 140 }} />
+          <col style={{ width: 124 }} />
+          <col style={{ width: 140 }} />
+          <col style={{ width: 140 }} />
+          <col style={{ width: 240 }} />
           <col />
-          <col style={{ width: 80 }} />
-          <col style={{ width: 104 }} />
+          {editable && <col style={{ width: 98 }} />}
         </colgroup>
         <thead>
           <tr>
             <th>{t('State')}</th>
             <th>{t('IP')}</th>
             <th>{t('Label')}</th>
+            <th>{t('Type')}</th>
             <th>{t('DNS name')}</th>
-            <th>{t('Vendor')}</th>
-            <th>{t('Open ports')}</th>
-            <th className="num">{t('Latency')}</th>
-            <th>{t('Seen')}</th>
+            <th>{t('MAC')}</th>
+            <th>{t('Ports')}</th>
+            <th>{t('Connection')}</th>
+            {editable && <th className="right">{t('Actions')}</th>}
           </tr>
         </thead>
         <tbody>
-          {from > 0 && <Pad h={from * ROW} />}
-          {rows.slice(from, to).map((n) => (
-            <IpRow key={n} n={n} a={addrs.get(n)} on={sel === n} onSel={onSel} vlans={vlans} switches={switches} editable={editable} onLabel={onLabel} />
-          ))}
-          {to < rows.length && <Pad h={(rows.length - to) * ROW} />}
+          {from > 0 && <Pad h={from * ROW} cols={cols} />}
+          {rows.slice(from, to).map((n) => {
+            const a = addrs.get(n);
+            const ip = intToIp(n);
+            return (
+              <IpRow
+                key={n}
+                n={n}
+                ip={ip}
+                a={a}
+                on={sel === n}
+                plug={plugOf(a, ip)}
+                vlans={vlans}
+                kinds={kinds}
+                editable={editable}
+                scanning={scanning.has(n)}
+                popOpen={pop?.n === n}
+                onSel={(x) => {
+                  clicked.current = x;
+                  onSel(x);
+                }}
+                onPatch={onPatch}
+                onRescan={rescan}
+                onPlug={(el) => setPop((p) => (p?.n === n ? null : { n, el }))}
+              />
+            );
+          })}
+          {to < rows.length && <Pad h={(rows.length - to) * ROW} cols={cols} />}
         </tbody>
       </table>
       {rows.length === 0 && <div className="empty">{t('No match')}</div>}
+      {pop && (
+        <PlugPop
+          key={pop.n}
+          ip={intToIp(pop.n)}
+          plug={plugOf(popAddr, intToIp(pop.n))}
+          anchor={pop.el}
+          switches={switches ?? []}
+          vlans={vlans}
+          onPut={onPut}
+          onClose={() => setPop(null)}
+        />
+      )}
     </div>
   );
 }
 
-function Pad({ h }: { h: number }) {
+function Pad({ h, cols }: { h: number; cols: number }) {
   return (
     <tr className="pad" aria-hidden>
-      <td colSpan={8} style={{ height: h }} />
+      <td colSpan={cols} style={{ height: h }} />
     </tr>
   );
 }
 
 function IpRow({
   n,
+  ip,
   a,
   on,
-  onSel,
+  plug,
   vlans,
-  switches,
+  kinds,
   editable,
-  onLabel,
+  scanning,
+  popOpen,
+  onSel,
+  onPatch,
+  onRescan,
+  onPlug,
 }: {
   n: number;
+  ip: string;
   a: Address | undefined;
   on: boolean;
-  onSel: (n: number) => void;
+  plug: Plug | null;
   vlans: Vlan[] | null;
-  switches: Switch[] | null;
+  kinds: DropOption<Kind | ''>[];
   editable: boolean;
-  onLabel: (n: number, label: string) => void;
+  scanning: boolean;
+  popOpen: boolean;
+  onSel: (n: number) => void;
+  onPatch: (ip: string, body: Record<string, unknown>) => Promise<void>;
+  onRescan: (n: number) => void;
+  onPlug: (el: HTMLElement) => void;
 }) {
-  const ip = intToIp(n);
   const s = ipState(a);
-  const cls = `st-row ${STATE_CLASS[s]} ${on ? 'sel' : ''}`;
-  const plug = a?.switch || switches?.some((sw) => sw.ports.some((p) => p.host === ip)) ? portOf(switches, a, ip) : null;
   const mm = plug ? vlanMismatch(vlans, plug.port, ip) : null;
-  return (
-    <tr className={cls} onClick={() => onSel(n)}>
-      <td>
-        <StatePill s={s} />
+  const reserve = (
+    <button
+      type="button"
+      className={`icon-btn ghost ${a?.reserved ? 'on' : ''}`}
+      title={a?.reserved ? t('Reserved') : t('Reserve')}
+      aria-pressed={!!a?.reserved}
+      onClick={() => void onPatch(ip, { reserved: !a?.reserved })}
+    >
+      <Bookmark size={13} />
+    </button>
+  );
+  const head = (
+    <>
+      <td title={stateTitle(s, a)}>
+        <span className={`st ${STATE_CLASS[s]}`} />
       </td>
       <td>
         <span className="ip">{ip}</span>
@@ -614,29 +694,108 @@ function IpRow({
           </span>
         )}
       </td>
-      {on && editable ? (
-        <td onClick={(e) => e.stopPropagation()}>
-          <TextInput className="cell-edit" value={a?.label ?? ''} commitOnBlur onChange={(v) => v !== (a?.label ?? '') && onLabel(n, v)} autoFocus />
-        </td>
-      ) : (
-        <LabelCell a={a} s={s} editable={editable} />
-      )}
-      <td>{a?.name ?? ''}</td>
-      <td>{a?.vendor ?? ''}</td>
+    </>
+  );
+  if (s === 'free')
+    return (
+      <tr className={`free ${on ? 'sel' : ''}`} onClick={() => onSel(n)}>
+        {head}
+        <td colSpan={6} />
+        {editable && (
+          <td>
+            <div className="acts">{reserve}</div>
+          </td>
+        )}
+      </tr>
+    );
+
+  const Icon = a?.kind ? KIND_ICON[a.kind] : null;
+  const vlan = plug ? vlanById(vlans, plug.port.vlan) : undefined;
+  const plugText = plug && (
+    <span className="plug">
+      <span className="vlan-sw" style={vlanStyle(vlan)} />
+      <span className="plug-name">
+        {plug.sw.name} · <span className="ip">{plug.port.name || plug.port.n}</span>
+      </span>
+    </span>
+  );
+  const plugTitle = plug && plug.port.vlan !== undefined ? [t('VLAN {id}', { id: plug.port.vlan }), vlan?.name].filter(Boolean).join(' · ') : undefined;
+  return (
+    <tr className={`${STATE_CLASS[s]} ${on ? 'sel' : ''}`} onClick={() => onSel(n)}>
+      {head}
+      <td>
+        <InlineText value={a?.label ?? ''} placeholder={t('Add a label')} editable={editable} onSave={(label) => void onPatch(ip, { label })} />
+      </td>
+      <td>
+        {editable ? (
+          <Dropdown className="cell" value={a?.kind ?? ''} options={kinds} onChange={(k) => void onPatch(ip, { kind: k || null })} />
+        ) : (
+          a?.kind &&
+          Icon && (
+            <span className="cell-kind">
+              <Icon size={14} className="kind-ic" />
+              {kindLabel(a.kind)}
+            </span>
+          )
+        )}
+      </td>
+      <td>{a?.name || <span className="muted2">—</span>}</td>
+      <td title={a?.vendor}>{a?.mac && <span className="mac">{a.mac}</span>}</td>
       <td>{a && a.ports.length > 0 && <PortChips a={a} max={3} />}</td>
-      <td className="num ip">{a?.up ? fmtMs(a.rttMs) : ''}</td>
-      <td>{s === 'free' || s === 'reserved' ? '' : fmtSeen(a?.lastSeen)}</td>
+      <td>
+        {editable ? (
+          <div
+            className={`ed dd ${popOpen ? 'open' : ''}`}
+            role="button"
+            tabIndex={0}
+            title={plugTitle}
+            aria-expanded={popOpen}
+            onClick={(e) => onPlug(e.currentTarget)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onPlug(e.currentTarget);
+              }
+            }}
+          >
+            {plugText || <span className="ph">{t('Connect…')}</span>}
+            <ChevronDown size={12} />
+          </div>
+        ) : (
+          <span title={plugTitle}>{plugText}</span>
+        )}
+      </td>
+      {editable && (
+        <td>
+          <div className="acts">
+            <button type="button" className="icon-btn ghost" title={t('Rescan')} disabled={scanning} onClick={() => onRescan(n)}>
+              <RefreshCw size={13} className={scanning ? 'spin' : undefined} />
+            </button>
+            <button
+              type="button"
+              className={`icon-btn ghost ${a?.watched ? 'on' : ''}`}
+              title={a?.watched ? t('Watched') : t('Watch')}
+              aria-pressed={!!a?.watched}
+              onClick={() => void onPatch(ip, { watched: !a?.watched })}
+            >
+              <Eye size={13} />
+            </button>
+            {reserve}
+          </div>
+        </td>
+      )}
     </tr>
   );
 }
 
-function LabelCell({ a, s, editable }: { a: Address | undefined; s: IpState; editable: boolean }) {
-  if (s === 'free') return <td />;
-  if (a?.label) return <td className="lbl">{a.label}</td>;
-  return <td className="lbl-empty">{editable && s !== 'reserved' ? t('Add a label') : ''}</td>;
-}
-
 const STATE_CLASS: Record<IpState, string> = { used: 'used', offline: 'off', reserved: 'resv', free: 'free' };
+
+/** The state as a dot; its title tells the rest (latency, last seen). */
+function stateTitle(s: IpState, a: Address | undefined): string {
+  if (s === 'used') return a?.rttMs !== undefined && a?.rttMs !== null ? t('Used · {n}', { n: fmtMs(a.rttMs) }) : stateLabel(s);
+  if (s === 'offline') return t('Offline · seen {when}', { when: fmtSeen(a?.lastSeen) });
+  return stateLabel(s);
+}
 
 /** The state written out: Used (green), Offline (orange), Reserved (blue ring), Free (grey ring). */
 function StatePill({ s }: { s: IpState }) {
@@ -654,6 +813,145 @@ function stateLabel(s: IpState): string {
     default:
       return tc('state', 'Free');
   }
+}
+
+const iconOf = (k: Kind) => {
+  const I = KIND_ICON[k];
+  return <I size={12} />;
+};
+
+/* ---------- Raccordement : un petit menu sous la cellule ---------- */
+
+function PlugPop({
+  ip,
+  plug,
+  anchor,
+  switches,
+  vlans,
+  onPut,
+  onClose,
+}: {
+  ip: string;
+  plug: Plug | null;
+  anchor: HTMLElement;
+  switches: Switch[];
+  vlans: Vlan[] | null;
+  onPut: (a: Address) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [swId, setSwId] = useState(plug?.sw.id ?? switches[0]?.id ?? '');
+  const [port, setPort] = useState<string | null>(plug ? String(plug.port.n) : null);
+  const [busy, setBusy] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+
+  // Sous la cellule, ou au-dessus s'il manque de place ; toujours dans la fenêtre.
+  const place = useCallback(() => {
+    const r = anchor.getBoundingClientRect();
+    const box = anchor.closest('.card-table')?.getBoundingClientRect();
+    if (!anchor.isConnected || (box && (r.bottom < box.top + 30 || r.top > box.bottom))) return close.current(); // la ligne est sortie de la vue
+    const w = ref.current?.offsetWidth ?? 280;
+    const h = ref.current?.offsetHeight ?? 180;
+    let top = r.bottom + 4;
+    if (top + h > innerHeight - 8) top = Math.max(8, r.top - h - 4);
+    setPos({ left: Math.max(8, Math.min(r.left, innerWidth - w - 8)), top });
+  }, [anchor]);
+  useLayoutEffect(place, [place]);
+
+  // Fermer : Échap, clic ailleurs, redimensionnement ; suivre la cellule quand la liste défile.
+  useEffect(() => {
+    const inside = (n: EventTarget | null) => n instanceof Node && (!!ref.current?.contains(n) || anchor.contains(n) || (n instanceof Element && !!n.closest('.dd-list')));
+    const down = (e: PointerEvent) => !inside(e.target) && close.current();
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      close.current();
+      anchor.focus();
+    };
+    const scroll = (e: Event) => !inside(e.target) && place();
+    const resize = () => close.current();
+    document.addEventListener('pointerdown', down, true);
+    document.addEventListener('keydown', key);
+    document.addEventListener('scroll', scroll, true);
+    window.addEventListener('resize', resize);
+    return () => {
+      document.removeEventListener('pointerdown', down, true);
+      document.removeEventListener('keydown', key);
+      document.removeEventListener('scroll', scroll, true);
+      window.removeEventListener('resize', resize);
+    };
+  }, [anchor, place]);
+
+  const sw = switches.find((x) => x.id === swId);
+  const swOptions: DropOption[] = switches.map((x) => ({ value: x.id, label: x.name, detail: x.ip }));
+  const portOptions: DropOption[] = (sw?.ports ?? []).map((p) => ({
+    value: String(p.n),
+    label: [p.name || String(p.n), p.mode === 'trunk' ? t('Trunk') : p.vlan !== undefined ? t('VLAN {id}', { id: p.vlan }) : ''].filter(Boolean).join(' · '),
+    icon: <span className="vlan-sw" style={p.mode === 'off' ? undefined : vlanStyle(vlanById(vlans, p.vlan))} />,
+    note: (p.host && p.host !== ip ? p.host : p.label) || undefined,
+  }));
+
+  // Les ports qui déclarent cette machine, sauf celui-ci.
+  const unplugOthers = async (keep?: { id: string; n: number }) => {
+    for (const x of switches)
+      for (const p of x.ports)
+        if (p.host === ip && !(keep && keep.id === x.id && keep.n === p.n)) await api('PATCH', `/api/switches/${x.id}/ports`, { ports: [p.n], set: { host: null } });
+  };
+
+  const ok = async () => {
+    if (!swId || !port) return;
+    const n = Number(port);
+    if (plug && plug.sw.id === swId && plug.port.n === n && plug.port.host === ip) return onClose();
+    setBusy(true);
+    try {
+      await api('PATCH', `/api/switches/${swId}/ports`, { ports: [n], set: { host: ip } });
+      await unplugOthers({ id: swId, n });
+      onClose();
+    } catch (e) {
+      fail(e);
+      setBusy(false);
+    }
+  };
+  const unplug = async () => {
+    setBusy(true);
+    try {
+      await unplugOthers();
+      onPut(await api<Address>('PATCH', `/api/addresses/${ip}`, { switch: null }));
+      onClose();
+    } catch (e) {
+      fail(e);
+      setBusy(false);
+    }
+  };
+
+  return createPortal(
+    <div ref={ref} className="pop" role="dialog" style={pos ?? { visibility: 'hidden' }} onClick={(e) => e.stopPropagation()}>
+      <span className="set-label">{t('Switch')}</span>
+      <Dropdown
+        value={swId || null}
+        options={swOptions}
+        onChange={(v) => {
+          setSwId(v);
+          setPort(null);
+        }}
+      />
+      <span className="set-label">{t('Port')}</span>
+      <Dropdown value={port} options={portOptions} onChange={setPort} />
+      <div className="pop-actions">
+        {plug && (
+          <button type="button" className="btn small" disabled={busy} onClick={() => void unplug()}>
+            {t('Unplug')}
+          </button>
+        )}
+        <button type="button" className="btn small primary" disabled={busy || !swId || !port} onClick={() => void ok()}>
+          {t('OK')}
+        </button>
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 /* ---------- Bandeau d'occupation : toute la plage d'un coup d'œil ---------- */
@@ -849,207 +1147,6 @@ function Tile({ n, a, gw, on, onSel }: { n: number; a: Address | undefined; gw: 
       {a && a.ports.length > 0 && <PortChips a={a} max={2} />}
     </button>
   );
-}
-
-
-/* ---------- Fiche de la machine ---------- */
-
-function HostPanel({
-  ip,
-  a,
-  vlans,
-  switches,
-  addrs,
-  editable,
-  onPatch,
-  onPut,
-  onClose,
-}: {
-  ip: string;
-  a: Address | undefined;
-  vlans: Vlan[] | null;
-  switches: Switch[] | null;
-  addrs: Map<number, Address> | null;
-  editable: boolean;
-  onPatch: (body: Record<string, unknown>) => void;
-  onPut: (a: Address) => void;
-  onClose: () => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const s = ipState(a);
-  const Icon = KIND_ICON[a?.kind ?? 'other'];
-  const plug = portOf(switches, a, ip);
-  const [swId, setSwId] = useState<string>(plug?.sw.id ?? '');
-  useEffect(() => setSwId(plug?.sw.id ?? ''), [plug?.sw.id]);
-  const sw = switches?.find((x) => x.id === swId);
-  const vlan = plug?.port.vlan !== undefined ? vlanById(vlans, plug.port.vlan) : undefined;
-  const mm = plug ? vlanMismatch(vlans, plug.port, ip) : null;
-
-  const rescan = async () => {
-    setBusy(true);
-    try {
-      onPut(await api<Address>('POST', `/api/addresses/${ip}/scan`));
-    } catch (e) {
-      fail(e);
-    }
-    setBusy(false);
-  };
-
-  const kindOptions: DropOption<Kind | ''>[] = [{ value: '', label: '—' }, ...KINDS.map((k) => ({ value: k, label: kindLabel(k), icon: iconOf(k) }))];
-  const swOptions: DropOption[] = [{ value: '', label: '—' }, ...(switches ?? []).map((x) => ({ value: x.id, label: x.name, detail: x.ip }))];
-  const portOptions: DropOption[] = (sw?.ports ?? []).map((p) => ({ value: String(p.n), label: p.name || String(p.n), note: p.label || undefined }));
-  const parents: DropOption[] = [
-    { value: '', label: '—' },
-    ...[...(addrs?.values() ?? [])]
-      .filter((x) => x.ip !== ip && (x.up || x.label) && x.kind && ['switch', 'router', 'firewall', 'wifi', 'server'].includes(x.kind))
-      .map((x) => ({ value: x.ip, label: displayName(x, x.ip), detail: x.ip })),
-    ...(switches ?? []).filter((x) => x.ip && x.ip !== ip).map((x) => ({ value: x.ip!, label: x.name, detail: x.ip })),
-  ].filter((o, i, all) => all.findIndex((y) => y.value === o.value) === i);
-  if (a?.parent && !parents.some((o) => o.value === a.parent)) parents.push({ value: a.parent, label: a.parent });
-
-  return (
-    <aside className="panel right">
-      <div className="host-head">
-        <span className="host-ico">
-          <Icon size={18} />
-        </span>
-        <div>
-          <b>{a?.label || a?.name || (s === 'free' ? t('Free') : ip)}</b>
-          <span className="ip">
-            {ip}
-            {a?.name ? ` · ${a.name}` : ''}
-          </span>
-        </div>
-        {editable && (
-          <button className="icon-btn ghost" title={t('Scan this machine')} disabled={busy} onClick={() => void rescan()}>
-            <RefreshCw size={14} className={busy ? 'spin' : undefined} />
-          </button>
-        )}
-        <button className="icon-btn ghost" title={t('Close')} onClick={onClose}>
-          <X size={14} />
-        </button>
-      </div>
-      <section className="insp-section">
-        <header>
-          <span>{t('Machine')}</span>
-        </header>
-        <div className="insp-body">
-          <div className="prop-row">
-            <span className="prop-label">{t('Label')}</span>
-            <TextInput value={a?.label ?? ''} commitOnBlur disabled={!editable} onChange={(v) => v !== (a?.label ?? '') && onPatch({ label: v })} />
-          </div>
-          <div className="prop-row">
-            <span className="prop-label">{t('Type')}</span>
-            <Dropdown value={a?.kind ?? ''} options={kindOptions} disabled={!editable} onChange={(k) => onPatch({ kind: k || null })} />
-          </div>
-          {a?.mac && (
-            <div className="prop-row">
-              <span className="prop-label">{t('MAC')}</span>
-              <span className="prop-val ip">{a.mac}</span>
-            </div>
-          )}
-          {a?.vendor && (
-            <div className="prop-row">
-              <span className="prop-label">{t('Vendor')}</span>
-              <span className="prop-val">{a.vendor}</span>
-            </div>
-          )}
-          {a?.firstSeen && (
-            <div className="prop-row">
-              <span className="prop-label">{t('Seen since')}</span>
-              <span className="prop-val">{fmtDate(a.firstSeen)}</span>
-            </div>
-          )}
-          {s !== 'used' && (
-            <div className="prop-row">
-              <span className="prop-label">{t('Reserved')}</span>
-              <Check checked={!!a?.reserved} disabled={!editable} onChange={(v) => onPatch({ reserved: v })} />
-            </div>
-          )}
-          <div className="prop-row">
-            <span className="prop-label">{t('Watch')}</span>
-            <Check checked={!!a?.watched} disabled={!editable} onChange={(v) => onPatch({ watched: v })} />
-          </div>
-        </div>
-      </section>
-      {a && a.ports.length > 0 && (
-        <section className="insp-section">
-          <header>
-            <span>{t('Open ports')}</span>
-          </header>
-          <div className="insp-body">
-            {a.ports.map((p) => (
-              <div key={p.port} className="svc-row">
-                <PortChip ip={ip} p={p} />
-                <span className="grow" title={p.banner}>
-                  {[p.web?.scheme ?? p.service, p.web?.title ? `«\u00a0${p.web.title}\u00a0»` : '', !p.web && p.banner ? p.banner : ''].filter(Boolean).join(' · ')}
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-      <section className="insp-section">
-        <header>
-          <span>{t('Connection')}</span>
-        </header>
-        <div className="insp-body">
-          <div className="prop-row">
-            <span className="prop-label">{t('Switch')}</span>
-            <Dropdown
-              value={swId}
-              options={swOptions}
-              disabled={!editable}
-              onChange={(v) => {
-                setSwId(v);
-                if (!v) onPatch({ switch: null });
-              }}
-            />
-          </div>
-          {swId && (
-            <div className="prop-row">
-              <span className="prop-label">{t('Port')}</span>
-              <Dropdown value={plug?.sw.id === swId ? String(plug.port.n) : null} options={portOptions} disabled={!editable} onChange={(v) => onPatch({ switch: { id: swId, port: Number(v) } })} />
-            </div>
-          )}
-          {plug && plug.port.vlan !== undefined && (
-            <div className="prop-row">
-              <span className="prop-label">{t('VLAN')}</span>
-              <VlanTag vlan={vlan} id={plug.port.vlan} name />
-              {mm && (
-                <span className="badge warn" title={t('Outside the subnet of VLAN {id} ({subnet})', { id: mm.id, subnet: mm.subnet ?? '' })}>
-                  {t('VLAN')}
-                </span>
-              )}
-            </div>
-          )}
-          <div className="prop-row">
-            <span className="prop-label">{t('Parent')}</span>
-            <Dropdown value={a?.parent ?? ''} options={parents} disabled={!editable} onChange={(v) => onPatch({ parent: v || null })} />
-          </div>
-        </div>
-      </section>
-      <section className="insp-section">
-        <header>
-          <span>{t('Notes')}</span>
-        </header>
-        <div className="insp-body">
-          <NotesField value={a?.notes ?? ''} disabled={!editable} onChange={(v) => onPatch({ notes: v })} />
-        </div>
-      </section>
-    </aside>
-  );
-}
-
-const iconOf = (k: Kind) => {
-  const I = KIND_ICON[k];
-  return <I size={12} />;
-};
-
-function NotesField({ value, disabled, onChange }: { value: string; disabled: boolean; onChange: (v: string) => void }) {
-  const [v, setV] = useState(value);
-  useEffect(() => setV(value), [value]);
-  return <textarea value={v} disabled={disabled} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.stopPropagation()} onBlur={() => v !== value && onChange(v)} />;
 }
 
 /* ---------- Créer / modifier un réseau ---------- */

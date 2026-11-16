@@ -1,6 +1,7 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { t } from '../i18n';
+import { TextInput } from '../ui/fields';
 import type { Address, Vlan } from './types';
 
 /** Pastille de VLAN : carré de couleur, numéro, nom éventuel. */
@@ -52,5 +53,36 @@ export function PortChip({ ip, p, svc, children }: { ip: string; p: Address['por
     <a className="port-chip" href={`${p.web.scheme}://${ip}:${p.port}/`} target="_blank" rel="noreferrer" title={p.web.title || t('Open the page')} onClick={(e) => e.stopPropagation()}>
       {body} <ExternalLink size={11} />
     </a>
+  );
+}
+
+/**
+ * A table cell that reads like text and becomes a field on click (Enter or leaving saves, Escape cancels).
+ * Read-only users see the plain text.
+ */
+export function InlineText({ value, placeholder, editable, onSave }: { value: string; placeholder?: string; editable: boolean; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  if (!editable) return <span className="cell-text">{value}</span>;
+  if (editing)
+    return (
+      <div className="ed editing">
+        <TextInput value={value} autoFocus commitOnBlur onFocus={(e) => e.currentTarget.select()} onChange={(v) => v.trim() !== value && onSave(v.trim())} onBlur={() => setEditing(false)} />
+      </div>
+    );
+  return (
+    <div
+      className="ed"
+      role="button"
+      tabIndex={0}
+      onClick={() => setEditing(true)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          setEditing(true);
+        }
+      }}
+    >
+      <span className={value ? '' : 'ph'}>{value || placeholder}</span>
+    </div>
   );
 }

@@ -51,6 +51,7 @@ export function TextInput({ value, onChange, commitOnBlur, autoGrow, onKeyDown, 
   const [local, setLocal] = useState(value);
   useEffect(() => setLocal(value), [value]);
   const area = useRef<HTMLTextAreaElement>(null);
+  const cancelled = useRef(false);
   useLayoutEffect(() => {
     const el = area.current;
     if (!el) return;
@@ -60,6 +61,10 @@ export function TextInput({ value, onChange, commitOnBlur, autoGrow, onKeyDown, 
   const shown = commitOnBlur ? local : value;
   const change = (v: string) => (commitOnBlur ? setLocal(v) : onChange(v));
   const commit = () => {
+    if (cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
     if (commitOnBlur && local !== value) onChange(local);
   };
   if (autoGrow) {
@@ -87,6 +92,7 @@ export function TextInput({ value, onChange, commitOnBlur, autoGrow, onKeyDown, 
         e.stopPropagation(); // pas de raccourci pendant la saisie
         if (e.key === 'Enter' && commitOnBlur) e.currentTarget.blur();
         if (e.key === 'Escape' && commitOnBlur) {
+          cancelled.current = true; // le blur qui suit ne doit rien envoyer
           setLocal(value);
           e.currentTarget.blur();
         }

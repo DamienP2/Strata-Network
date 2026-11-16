@@ -138,7 +138,7 @@ export function Dropdown<T extends string>({
         }}
       >
         {current?.icon !== undefined && <span className="dd-icon">{current.icon}</span>}
-        <span className="dd-label" style={current?.style}>
+        <span className={current ? 'dd-label' : 'dd-label dd-ph'} style={current?.style}>
           {current ? current.label : placeholder}
         </span>
         {current?.detail && <span className="dd-detail">{current.detail}</span>}

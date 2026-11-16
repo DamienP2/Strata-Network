@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { CloudDownload, Gauge, HeartPulse, History, Lock, Network, RotateCcw, SlidersHorizontal, Users } from 'lucide-react';
+import { CloudDownload, Gauge, HeartPulse, History, Layers, Lock, Network, RotateCcw, SlidersHorizontal, Users } from 'lucide-react';
 import { t } from '../i18n';
 import { can, type PublicUser } from '../store';
 
@@ -38,7 +38,10 @@ export const SYSTEM_GROUPS: SystemGroup[] = [
   {
     id: 'network',
     title: () => t('Network'),
-    sections: [{ id: 'snmp', icon: Network, label: () => t('SNMP'), admin: true }],
+    sections: [
+      { id: 'vlans', icon: Layers, label: () => t('VLAN'), admin: false },
+      { id: 'snmp', icon: Network, label: () => t('SNMP'), admin: true },
+    ],
   },
   {
     id: 'server',

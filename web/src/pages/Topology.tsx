@@ -1,11 +1,13 @@
-import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { ChevronDown, ChevronRight, Download, Ellipsis, EthernetPort, Layers, ListTree, Network as NetIcon, Scan as Fit } from 'lucide-react';
+import { ChevronDown, ChevronRight, Download, Ellipsis, EthernetPort, Layers, Link2, ListTree, Network as NetIcon, Save, Scan as Fit, X } from 'lucide-react';
 import { t, tn } from '../i18n';
+import { api, can, useApp } from '../store';
 import { Segmented } from '../ui/fields';
+import { Dropdown, type DropOption } from '../ui/Dropdown';
 import { Empty } from '../ui/Empty';
 import { byIp, parseRange, ipToInt } from '../net/ip';
-import { KIND_ICON, displayName, downloadText, portName, useAllAddresses, useList, vlanOfIp } from '../net/model';
+import { KIND_ICON, displayName, downloadText, fail, portName, useAllAddresses, useList, vlanOfIp } from '../net/model';
 import type { Address, Network, Switch, Vlan } from '../net/types';
 
 interface TNode {
@@ -56,6 +58,9 @@ function buildTree(switches: Switch[], addrs: Map<string, Address>, networks: Ne
     parent.set(child, p);
   };
 
+  // Parents posés à la main (« Rattacher à… ») : ils passent avant les déductions.
+  for (const a of addrs.values()) if (a.parent && nodes.has(idOfIp(a.ip))) link(idOfIp(a.ip), { id: hostNode(a.parent) });
+
   // Machines branchées sur un port de switch.
   for (const sw of switches)
     for (const p of sw.ports) if (p.host && !swByIp.has(p.host)) link(hostNode(p.host), { id: `sw:${sw.id}`, port: p.name || String(p.n) });
@@ -97,9 +102,6 @@ function buildTree(switches: Switch[], addrs: Map<string, Address>, networks: Ne
       }
     }
   }
-
-  // Parents posés à la main.
-  for (const a of addrs.values()) if (a.parent && nodes.has(idOfIp(a.ip))) link(idOfIp(a.ip), { id: hostNode(a.parent) });
 
   // Le reste sous la passerelle de son réseau, quand elle est connue.
   const nets = networks.map((n) => ({ n, r: parseRange(n.range) }));
@@ -265,6 +267,8 @@ function layout(roots: TNode[], maxLeaves: number, expanded: Set<string>, restSu
 /* ---------- La page ---------- */
 
 export function Topology() {
+  const editable = can.edit(useApp((s) => s.auth?.user));
+  const [attach, setAttach] = useState<TNode | null>(null);
   const [switches] = useList<Switch[]>('switches', '/api/switches');
   const [networks] = useList<Network[]>('networks', '/api/networks');
   const [vlans] = useList<Vlan[]>('vlans', '/api/vlans');
@@ -344,10 +348,11 @@ export function Topology() {
         </div>
         <div className="tree">
           {roots.map((n) => (
-            <TreeRow key={n.id} node={n} depth={0} sel={sel} onPick={setSel} />
+            <TreeRow key={n.id} node={n} depth={0} sel={sel} onPick={setSel} onAttach={editable ? setAttach : undefined} />
           ))}
         </div>
       </aside>
+      {attach?.ip && <AttachDialog node={attach} ip={attach.ip} addrs={addrs} switches={switches} onClose={() => setAttach(null)} />}
       <div className="topo-canvas" ref={canvas}>
         <div className="topo-tools">
           <Segmented
@@ -406,7 +411,7 @@ export function Topology() {
   );
 }
 
-function TreeRow({ node, depth, sel, onPick }: { node: TNode; depth: number; sel: string | null; onPick: (id: string) => void }) {
+function TreeRow({ node, depth, sel, onPick, onAttach }: { node: TNode; depth: number; sel: string | null; onPick: (id: string) => void; onAttach?: (n: TNode) => void }) {
   const [open, setOpen] = useState(depth < 3);
   const kids = node.children.length > 0;
   return (
@@ -425,14 +430,89 @@ function TreeRow({ node, depth, sel, onPick }: { node: TNode; depth: number; sel
         {node.vlan ? <span className="vlan-sw" style={{ '--vlan': node.vlan.color } as CSSProperties} /> : <node.icon size={15} />}
         <span className="name">{node.name}</span>
         {node.ip && <span className="ip">{node.ip}</span>}
+        {onAttach && node.ip && (node.id.startsWith('ip:') || node.id.startsWith('sw:')) && (
+          <button
+            type="button"
+            className="icon-btn ghost tree-act"
+            title={t('Attach to…')}
+            onClick={(e) => {
+              e.stopPropagation();
+              onAttach(node);
+            }}
+          >
+            <Link2 size={13} />
+          </button>
+        )}
       </div>
       {kids && open && (
         <div className="tree-kids">
           {node.children.map((c) => (
-            <TreeRow key={c.id} node={c} depth={depth + 1} sel={sel} onPick={onPick} />
+            <TreeRow key={c.id} node={c} depth={depth + 1} sel={sel} onPick={onPick} onAttach={onAttach} />
           ))}
         </div>
       )}
     </>
+  );
+}
+
+/* ---------- Rattacher une machine à son parent ---------- */
+
+const PARENT_KINDS = ['switch', 'router', 'firewall', 'wifi', 'server'];
+
+function AttachDialog({ node, ip, addrs, switches, onClose }: { node: TNode; ip: string; addrs: Map<string, Address>; switches: Switch[]; onClose: () => void }) {
+  const current = addrs.get(ip)?.parent ?? '';
+  const [parent, setParent] = useState(current);
+  const [busy, setBusy] = useState(false);
+
+  // Les appareils qui peuvent porter d'autres machines : switchs, routeurs, pare-feu, bornes, serveurs.
+  const options: DropOption[] = [
+    { value: '', label: t('None') },
+    ...switches.filter((x) => x.ip && x.ip !== ip).map((x) => ({ value: x.ip!, label: x.name, sub: x.ip, icon: <EthernetPort size={12} /> })),
+    ...[...addrs.values()]
+      .filter((x) => x.ip !== ip && (x.up || x.label) && x.kind && PARENT_KINDS.includes(x.kind))
+      .sort((a, b) => byIp(a.ip, b.ip))
+      .map((x) => {
+        const I = KIND_ICON[x.kind ?? 'other'];
+        return { value: x.ip, label: displayName(x, x.ip), sub: x.ip, icon: <I size={12} /> };
+      }),
+  ].filter((o, i, all) => all.findIndex((y) => y.value === o.value) === i);
+  if (current && !options.some((o) => o.value === current)) options.push({ value: current, label: current });
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (parent === current) return onClose();
+    setBusy(true);
+    try {
+      await api('PATCH', `/api/addresses/${ip}`, { parent: parent || null });
+      onClose();
+    } catch (err) {
+      fail(err);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-back" onPointerDown={onClose}>
+      <form className="modal dialog" role="dialog" aria-labelledby="attach-title" onPointerDown={(e) => e.stopPropagation()} onSubmit={submit}>
+        <header>
+          <h2 id="attach-title">{t('Attach {name} to…', { name: node.name })}</h2>
+          <button type="button" className="icon-btn ghost" title={t('Close')} onClick={onClose}>
+            <X size={16} />
+          </button>
+        </header>
+        <div className="set-field">
+          <span className="set-label">{t('Parent')}</span>
+          <Dropdown value={parent} options={options} onChange={setParent} />
+        </div>
+        <footer>
+          <button type="button" className="btn" onClick={onClose}>
+            {t('Cancel')}
+          </button>
+          <button type="submit" className="btn primary" disabled={busy}>
+            <Save size={14} /> {t('Save')}
+          </button>
+        </footer>
+      </form>
+    </div>
   );
 }
