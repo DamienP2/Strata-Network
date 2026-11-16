@@ -39,7 +39,7 @@ interface Address {            // only known addresses are stored; the client fi
   name?: string; nameSource?: 'dns' | 'mdns' | 'netbios';
   ports: Port[];
   firstSeen?: number; lastSeen?: number;   // unix ms
-  isNew: boolean;              // first seen by the last scan, until someone opens it (PATCH {isNew:false})
+  isNew: boolean;              // first seen by the last scan (not the first scan of the network); cleared by the next scan or when opened
   parent?: string;             // topology: IP of the device it hangs from (set by hand)
   switch?: { id: string; port: number };   // where it is plugged (set by hand, or from a switch MAC table)
 }

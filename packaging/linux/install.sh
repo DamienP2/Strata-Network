@@ -16,4 +16,6 @@ fi
 install -m 755 "$here/strata-network" "$dest/strata-network"
 ln -sf "$dest/strata-network" /usr/local/bin/strata-network
 "$dest/strata-network" service install "$@"
+# The service may replace its own program (updates from the web page).
+chown -R strata-network:strata-network "$dest"
 echo "Strata Network is installed. Without a browser on this machine, create the admin with: sudo strata-network user add admin"

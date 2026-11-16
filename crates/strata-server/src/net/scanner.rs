@@ -49,9 +49,12 @@ fn merge(n: &Net, st: &mut Store, h: Host, now: i64, inventory: bool) -> Address
         a.ports = h.ports;
     }
     a.last_seen = Some(now);
+    // "New" = first seen by this scan (not by the inventory scan); cleared by the next scan.
     if first {
         a.first_seen = Some(now);
-        a.is_new = true;
+        a.is_new = !inventory;
+    } else {
+        a.is_new = false;
     }
     let out = a.clone();
     if first && !inventory {
