@@ -970,7 +970,7 @@ function PortRow({
           editable={editable}
           extra={
             online && lp?.alias ? (
-              <span className="descr" title={t('Description in the switch')}>
+              <span className="descr" title={`${t('Description in the switch')} · ${lp.alias}`}>
                 « {lp.alias} »
               </span>
             ) : undefined

@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Strata Network — multicast</title>
+<!--CSS-->
+<link rel="stylesheet" href="../src/styles.css" />
+<link rel="stylesheet" href="../src/styles-light.css" />
+<!--/CSS-->
+<style>
+/* ── Maquette seulement ── */
+[hidden] { display: none !important; }
+.mk-switch { position: fixed; left: 18px; bottom: 16px; z-index: 400; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--line-2); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); font-size: 12px; color: var(--text-2); }
+
+.page-2 { height: 100%; display: grid; grid-template-columns: 240px minmax(0, 1fr); }
+.page-2 > .library { min-width: 0; }
+.library-inner.full { max-width: none; padding-left: 20px; padding-right: 20px; }
+.ip { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.muted2 { color: var(--text-3); }
+
+/* En ligne : l'interrupteur et son état dans l'en-tête */
+.live { display: inline-flex; align-items: center; gap: 10px; height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); }
+.live.on { border-color: color-mix(in srgb, var(--pvw) 55%, transparent); background: color-mix(in srgb, var(--pvw) 8%, var(--panel)); }
+.live .check { color: var(--text); font-weight: 600; }
+.live-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+.live-state::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--pvw); box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18); animation: blink 2s infinite; }
+.live .dd-btn { width: 76px; height: 24px; }
+
+/* Ce que le switch dit de lui-même */
+.sys-strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.sys-strip > div { padding: 10px 14px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.sys-strip > div + div { border-left: 1px solid var(--line); }
+.sys-strip .set-label { font-size: 11px; }
+.sys-strip b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sys-strip b.mono { font: 600 12.5px var(--mono); }
+
+/* Écarts entre l'inventaire et le switch */
+.diffs { display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 14px; border-radius: 10px; background: rgba(245, 165, 36, 0.1); border: 1px solid rgba(245, 165, 36, 0.45); color: var(--text); font-size: 12.5px; }
+.diffs svg { color: var(--warn); flex: none; }
+.diff { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 10px; background: rgba(245, 165, 36, 0.15); color: var(--warn); cursor: help; }
+.pt tr.has-diff td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.take { height: 22px; padding: 0 7px; font-size: 11px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel-3); color: var(--text-2); cursor: pointer; }
+.take:hover { color: var(--text); border-color: var(--text-3); }
+
+/* Façade en ligne : lien allumé / éteint, et la charge du port en bas de chaque prise */
+.sw-face.live-face .sw-port .link { background: #22c55e; box-shadow: 0 0 5px #22c55e; }
+.sw-face.live-face .sw-port.down { opacity: 0.55; }
+.sw-face.live-face .sw-port.down .link { background: #4b5068; box-shadow: none; }
+.sw-port .load { position: absolute; left: 2px; right: 2px; bottom: 2px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.sw-port .load i { position: absolute; inset: 0 auto 0 0; background: #e6e8f2; border-radius: 2px; }
+.sw-port .load i.hot { background: #f5a524; }
+
+/* Colonnes en ligne du tableau des ports */
+.lk { display: inline-flex; align-items: center; gap: 6px; font: 600 11.5px var(--mono); }
+.lk::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--line-2); }
+.lk.up { color: var(--text); }
+.lk.up::before { background: var(--pvw); box-shadow: 0 0 6px var(--pvw); }
+.lk.down { color: var(--text-3); font-weight: 500; }
+.lk.admin-off::before { background: none; box-shadow: inset 0 0 0 1.5px var(--line-2); }
+.rate { display: flex; align-items: center; gap: 8px; }
+.rate svg { flex: none; color: var(--accent); }
+.rate .io { display: flex; flex-direction: column; line-height: 1.15; font: 11px var(--mono); }
+.rate .io span:first-child { color: var(--text); }
+.rate .io span:last-child { color: var(--text-3); }
+.err { font: 11.5px var(--mono); color: var(--text-3); }
+.err.bad { color: var(--live); font-weight: 600; }
+.pt td.num, .pt th.num { text-align: right; }
+.vlan-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 1px 7px 1px 5px; border-radius: 10px; white-space: nowrap; background: color-mix(in srgb, var(--vlan) 16%, transparent); color: var(--text); }
+.vlan-tag .vlan-sw { width: 8px; height: 8px; border-radius: 2px; background: var(--vlan); }
+.vlan-tag b { font-family: var(--mono); font-weight: 600; }
+.vlan-sw { width: 10px; height: 10px; border-radius: 3px; background: var(--vlan, var(--text-3)); flex: none; display: inline-block; }
+.ed { display: flex; align-items: center; gap: 6px; height: 26px; margin: 0 -6px; padding: 0 6px; border-radius: 6px; border: 1px solid transparent; overflow: hidden; }
+tr:hover .ed { border-color: var(--line); background: var(--panel-3); }
+.ed .ph { color: var(--text-3); }
+.pt .segmented button { padding: 2px 7px; font-size: 11px; }
+.tick { appearance: none; width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--line-2); background: var(--panel-3); cursor: pointer; margin: 0; vertical-align: middle; }
+.descr { color: var(--text-3); font-size: 11.5px; margin-left: 6px; }
+
+/* ── Ajouts : onglets, voisins, optiques, multicast, santé, alertes ── */
+.tabpane { display: none; flex-direction: column; gap: 12px; }
+.tabpane.on { display: flex; }
+.sys-strip.health { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.hv { display: flex; align-items: center; gap: 6px; }
+.hv .perf-bar { flex: 1; }
+.ok-t { color: var(--pvw); } .warn-t { color: var(--warn); } .bad-t { color: var(--live); }
+.info-bar { display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 14px; border-radius: 10px; background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); font-size: 12.5px; }
+.info-bar svg { color: var(--accent-2); flex: none; }
+/* Façade : agrégats, STP, optique */
+.sw-face { position: relative; padding-bottom: 28px; gap: 12px; overflow: visible; }
+.sw-face .sw-port.sfp { width: 34px; }
+.po-mark { position: absolute; bottom: 8px; height: 12px; border: 1.5px solid #8fa3ff; border-top: none; border-radius: 0 0 4px 4px; }
+.po-mark span { position: absolute; left: 50%; bottom: -8px; transform: translateX(-50%); background: #10121a; padding: 0 3px; font: 600 10px/1 var(--mono); color: #bfcaff; }
+.sw-port .stp { position: absolute; inset: 0; display: grid; place-items: center; color: #ff8aa0; font-size: 14px; font-weight: 800; background: rgba(16, 18, 26, 0.55); border-radius: inherit; }
+.sw-port .opt { position: absolute; top: 2px; left: 2px; width: 5px; height: 5px; border-radius: 50%; background: #f5a524; box-shadow: 0 0 4px #f5a524; }
+.sw-port.q { width: 42px; height: 22px; border-radius: 3px; border-color: #8fa3ff; }
+.sw-qsfp { display: grid; grid-template-rows: repeat(2, 22px); grid-auto-flow: column; gap: 9px 4px; }
+/* Voisin, agrégat, STP dans le tableau */
+.nb { display: inline-flex; align-items: center; gap: 6px; }
+.nb svg { color: var(--accent-2); }
+.nb small { font: 10.5px var(--mono); color: var(--text-3); padding: 0 4px; border: 1px solid var(--line-2); border-radius: 4px; }
+.tagx { font: 600 11px var(--mono); padding: 1px 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-2); }
+.tagx.blk { background: var(--live-soft); color: #ff8aa0; }
+:root[data-theme='light'] .tagx.blk { color: var(--t-red); }
+.exp { width: 22px; height: 22px; border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: 5px; }
+.exp:hover { background: var(--panel-3); color: var(--text); }
+tr.open .exp svg { transform: rotate(180deg); }
+tr.chart td { height: auto; padding: 0; background: var(--panel-2) !important; }
+.chart-box { padding: 12px 14px 14px 52px; display: flex; flex-direction: column; gap: 8px; }
+.chart-head { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--text-2); }
+.chart-head b { color: var(--text); }
+.chart-svg { width: 100%; height: 120px; }
+.chart-svg .in { fill: color-mix(in srgb, var(--accent) 22%, transparent); stroke: var(--accent); stroke-width: 1.5; }
+.chart-svg .out { fill: none; stroke: var(--pvw); stroke-width: 1.5; }
+.chart-svg .grid { stroke: var(--line); stroke-width: 1; }
+.chart-svg text { fill: var(--text-3); font: 10.5px var(--mono); }
+/* Optiques */
+.dbm { display: flex; align-items: center; gap: 8px; }
+.dbm .scale { position: relative; width: 120px; height: 6px; border-radius: 4px; background: linear-gradient(90deg, var(--live) 0 18%, var(--warn) 18% 30%, var(--pvw) 30% 85%, var(--warn) 85% 100%); opacity: 0.55; }
+.dbm .scale i { position: absolute; top: -3px; width: 3px; height: 12px; border-radius: 2px; background: var(--text); }
+.dbm span { font: 600 11.5px var(--mono); min-width: 64px; text-align: right; }
+/* Multicast */
+.ports-list { display: flex; gap: 4px; flex-wrap: nowrap; overflow: hidden; }
+.pchip { font: 600 11px var(--mono); padding: 1px 6px; border-radius: 10px; background: var(--panel-3); color: var(--text-2); }
+.pchip.router { background: rgba(245, 165, 36, 0.15); color: var(--warn); }
+/* Santé */
+.health-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.hcard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.hcard h3 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
+.hcard .big { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.hrow { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.hrow .grow { flex: 1; color: var(--text-2); }
+.hrow .mono { font-family: var(--mono); }
+/* Alertes */
+.rules { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.rule { display: grid; grid-template-columns: minmax(0, 1fr) 320px 60px; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.rule:last-child { border-bottom: none; }
+.rule b { font-size: 13px; font-weight: 600; }
+.rule .muted { font-size: 12px; }
+.rule .num-in { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); justify-content: flex-end; }
+.rule .num-in input { width: 64px; min-height: 0; height: 28px; text-align: right; font-family: var(--mono); }
+.star { color: var(--text-3); cursor: pointer; }
+body.poe .sys-strip.health { grid-template-columns: repeat(9, minmax(0, 1fr)); }
+.sw-port.rj { width: 26px; height: 26px; }
+body:not(.poe) .poe-only, body.poe .no-poe { display: none !important; }
+.poe-w { font: 600 11.5px var(--mono); display: inline-flex; align-items: center; gap: 4px; }
+.poe-w svg { color: var(--key); }
+.sw-port .poe { position: absolute; bottom: 1px; right: 2px; width: 6px; height: 6px; color: var(--key); font-size: 8px; line-height: 6px; }
+.star.on { color: var(--key); }
+</style>
+<style>
+/* ── Multicast ── */
+.tchip { font: 600 11px var(--mono); padding: 1px 7px; border-radius: 10px; }
+.tchip.v { background: var(--accent-soft); color: var(--accent-2); }
+.tchip.a { background: rgba(45, 212, 191, 0.14); color: #2dd4bf; }
+.tchip.d { background: rgba(232, 121, 249, 0.14); color: #e879f9; }
+.tchip.ts { background: var(--panel-3); color: var(--text-2); }
+:root[data-theme='light'] .tchip.a { color: #0f766e; } :root[data-theme='light'] .tchip.d { color: #a21caf; }
+.unk { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px dashed var(--line-2); color: var(--text-3); margin-left: 6px; }
+.pair { font: 600 11px var(--mono); display: inline-flex; gap: 3px; }
+.pair i { font-style: normal; width: 18px; text-align: center; border-radius: 4px; padding: 1px 0; }
+.pair .r { background: rgba(45, 212, 191, 0.18); color: #2dd4bf; } .pair .b { background: rgba(232, 121, 249, 0.18); color: #e879f9; }
+.pair .x { background: var(--live-soft); color: #ff8aa0; text-decoration: line-through; }
+.rx { display: flex; align-items: center; gap: 6px; }
+.rx b { font-variant-numeric: tabular-nums; min-width: 18px; }
+.src small { color: var(--text-3); font-family: var(--mono); margin-left: 6px; }
+tr.detail td { height: auto; padding: 0; background: var(--panel-2) !important; white-space: normal; }
+.det { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 16px 40px; }
+.path { display: flex; align-items: center; gap: 0; flex-wrap: nowrap; overflow-x: auto; padding: 4px 0 8px; }
+.node { flex: none; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; min-width: 150px; }
+.node b { font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+.node .ip { font-size: 11px; color: var(--text-3); }
+.node .pl { display: flex; flex-wrap: wrap; gap: 4px; max-width: 260px; }
+.node.src-n { border-color: color-mix(in srgb, var(--pvw) 60%, transparent); }
+.node.rcv { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.wire { flex: none; width: 84px; display: flex; flex-direction: column; align-items: center; font: 600 10.5px var(--mono); color: var(--text-3); }
+.wire::before { content: ''; width: 100%; height: 2px; background: linear-gradient(90deg, var(--pvw), var(--accent)); border-radius: 2px; margin-bottom: 3px; }
+.kv { display: grid; grid-template-columns: repeat(3, 100px minmax(0, 1fr)); gap: 5px 10px; font-size: 12px; align-content: start; }
+.kv span { color: var(--text-3); } .kv b { font-weight: 600; font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.det-actions { display: flex; gap: 8px; margin-top: 10px; }
+.res-row { display: grid; grid-template-columns: 170px minmax(0, 1fr) 150px 90px 90px 150px 150px; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.res-row.h { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; background: var(--panel-2); }
+.res-row:last-child { border-bottom: none; }
+.res { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.gm { display: flex; align-items: center; gap: 8px; }
+.gm .badge-gm { font: 600 10.5px var(--mono); padding: 1px 6px; border-radius: 10px; background: rgba(34, 197, 94, 0.15); color: var(--pvw); }
+.gm .badge-gm.bk { background: var(--panel-3); color: var(--text-2); }
+</style>
+</head>
+<body>
+<div id="root"><div class="app">
+<nav class="topbar">
+  <div class="brand"><span class="brand-lockup">
+    <svg class="brand-f-lead" viewBox="93.8 -0.2 52.3 52.95" width="23.7" height="24" aria-hidden="true"><path fill="currentColor" d="__F__"/></svg>
+    <span class="brand-name">Strata</span><span class="brand-module">Network</span>
+  </span></div>
+  <div class="tabs home-tabs">
+    <button><i data-i="radar" data-s="14"></i> <span class="tab-label">Scan</span></button>
+    <button><i data-i="ethernet-port" data-s="14"></i> <span class="tab-label">Switchs</span></button>
+    <button class="on"><i data-i="radio" data-s="14"></i> <span class="tab-label">Multicast</span></button>
+    <button><i data-i="list-tree" data-s="14"></i> <span class="tab-label">Topologie</span></button>
+    <button><i data-i="bell" data-s="14"></i> <span class="tab-label">Alertes</span><span class="nav-dot warn"></span></button>
+    <button><i data-i="server" data-s="14"></i> <span class="tab-label">Système</span></button>
+  </div>
+  <div class="spacer"></div>
+  <span class="ux1-pill"><span class="ux1-dot"></span>Connecté</span>
+</nav>
+<div class="content">
+<div class="page-2">
+  <aside class="lib-nav">
+    <div class="lib-nav-section"><span>Flux</span></div>
+    <div class="lib-nav-item on"><i data-i="radio" data-s="15"></i><span class="grow">Tous les flux</span><span class="count">42</span></div>
+    <div class="lib-nav-item"><i data-i="video" data-s="15"></i><span class="grow">Vidéo</span><span class="count">18</span></div>
+    <div class="lib-nav-item"><i data-i="audio-lines" data-s="15"></i><span class="grow">Audio</span><span class="count">16</span></div>
+    <div class="lib-nav-item"><i data-i="file-text" data-s="15"></i><span class="grow">Données</span><span class="count">4</span></div>
+    <div class="lib-nav-item"><i data-i="layout-grid" data-s="15"></i><span class="grow">MPEG-TS</span><span class="count">4</span></div>
+    <div class="lib-nav-section"><span>Réseaux</span></div>
+    <div class="lib-nav-item"><span class="vlan-sw" style="--vlan:#2dd4bf"></span><span class="grow">110 · ST 2110 Rouge</span><span class="count">21</span></div>
+    <div class="lib-nav-item"><span class="vlan-sw" style="--vlan:#e879f9"></span><span class="grow">120 · ST 2110 Bleu</span><span class="count">21</span></div>
+    <div class="lib-nav-section"><span>À vérifier</span></div>
+    <div class="lib-nav-item"><i data-i="eye-off" data-s="15"></i><span class="grow">Non annoncés</span><span class="nav-dot warn"></span><span class="count">4</span></div>
+    <div class="lib-nav-item"><i data-i="users" data-s="15"></i><span class="grow">Sans récepteur</span><span class="count">3</span></div>
+    <div class="lib-nav-item"><i data-i="split" data-s="15"></i><span class="grow">Paire 2022-7 incomplète</span><span class="nav-dot warn"></span><span class="count">1</span></div>
+    <div class="lib-nav-item"><i data-i="triangle-alert" data-s="15"></i><span class="grow">Conflits</span><span class="nav-dot bad"></span><span class="count">1</span></div>
+  </aside>
+  <main class="library"><div class="library-inner full">
+    <div class="settings-head">
+      <div><h1>Multicast</h1></div>
+      <div class="spacer"></div>
+      <button class="dd-btn" style="flex:none;width:auto"><i data-i="cable" data-s="13"></i><span class="dd-label">eth1 · 10.10.0.5</span><i data-i="chevron-down" data-s="12"></i></button>
+    </div>
+
+    <div class="sys-strip" style="grid-template-columns:repeat(6,minmax(0,1fr))">
+      <div><span class="set-label">Flux actifs</span><b>42</b></div>
+      <div><span class="set-label">Débit estimé</span><b>61,4 Gb/s</b></div>
+      <div><span class="set-label">Récepteurs</span><b>118 ports</b></div>
+      <div><span class="set-label">Paires 2022-7</span><b>17 <span class="warn-t">· 1 incomplète</span></b></div>
+      <div><span class="set-label">Grandmaster PTP</span><b>gm-meinberg-01 · dom. 127</b></div>
+      <div><span class="set-label">Switchs lus</span><b class="ok-t">3 / 3</b></div>
+    </div>
+
+    <div class="diffs"><i data-i="triangle-alert" data-s="16"></i><span><b>239.10.9.10</b> émis par 2 sources (10.10.1.21 et 10.10.1.22) · <b>VLAN 120 sur SW-Std</b> : pas de snooping IGMP, 6 flux envoyés sur tous les ports</span><div class="spacer"></div><button class="btn small">Voir</button></div>
+
+    <div class="sys-tabrow"><div class="tabs sys-tabs" id="tabs">
+      <button class="on" data-t="flows"><i data-i="radio" data-s="14"></i><span>Flux</span><span class="sys-tab-n">42</span></button>
+      <button data-t="plan"><i data-i="layout-grid" data-s="14"></i><span>Plan des groupes</span></button>
+      <button data-t="ptp"><i data-i="timer" data-s="14"></i><span>PTP</span><span class="sys-tab-n">14</span></button>
+      <button data-t="services"><i data-i="network" data-s="14"></i><span>Services</span><span class="sys-tab-n">27</span></button>
+    </div></div>
+
+    <!-- ── Flux ── -->
+    <div class="tabpane on" data-t="flows">
+      <div class="media-toolbar"><label class="search" style="width:260px"><i data-i="search" data-s="14"></i><input placeholder="Groupe, nom, émetteur, port" /></label>
+        <div class="asr-chips"><button class="asr-chip on">Tous <span class="asr-chip-n">42</span></button><button class="asr-chip">Reçus <span class="asr-chip-n">39</span></button><button class="asr-chip">Arrêtés <span class="asr-chip-n">2</span></button><button class="asr-chip">Routés <span class="asr-chip-n">6</span></button></div>
+        <div class="spacer"></div><div class="segmented"><button class="on">Par paire</button><button>Un flux par ligne</button></div></div>
+      <table class="pt">
+        <colgroup><col style="width:26px"><col style="width:150px"><col style="width:17%"><col style="width:84px"><col style="width:150px"><col style="width:20%"><col style="width:15%"><col style="width:96px"><col style="width:70px"><col style="width:42px"></colgroup>
+        <thead><tr><th></th><th>Groupe</th><th>Nom</th><th>Type</th><th>Format</th><th>Émetteur</th><th>Récepteurs</th><th class="num">Débit</th><th>2022-7</th><th></th></tr></thead>
+        <tbody id="flows"></tbody>
+      </table>
+    </div>
+
+    <!-- ── Plan des groupes ── -->
+    <div class="tabpane" data-t="plan">
+      <div class="occ-card">
+        <div class="occ-head"><span><b>58</b> groupes utilisés</span><span><b>12</b> réservés</span><span><b>1</b> en conflit</span><span class="spacer"></span><span class="ip">239.10.0.0/16 · 239.20.0.0/16</span></div>
+        <div id="occ"></div>
+        <div class="occ-ticks indent"><span>.0</span><span>.16</span><span>.32</span><span>.48</span><span>.64</span><span>.80</span><span>.96</span><span>.112</span><span>.128</span><span>.144</span><span>.160</span><span>.176</span><span>.192</span><span>.208</span><span>.224</span><span>.240</span></div>
+        <div class="sw-legend"><span><span class="vlan-sw" style="--vlan:var(--pvw)"></span>Émis</span><span><span class="vlan-sw" style="--vlan:var(--accent)"></span>Réservé</span><span><span class="vlan-sw" style="--vlan:var(--warn)"></span>Conflit</span><span><span class="vlan-sw" style="--vlan:var(--panel-3)"></span>Libre</span></div>
+      </div>
+      <div class="res">
+        <div class="res-row h"><span>Plage</span><span>Usage</span><span>VLAN</span><span class="num">Utilisés</span><span class="num">Libres</span><span>Prochain libre</span><span></span></div>
+        <div class="res-row"><span class="ip">239.10.1.0/24</span><span>Caméras · vidéo Rouge</span><span><span class="vlan-tag" style="--vlan:#2dd4bf"><span class="vlan-sw"></span><b>110</b> Rouge</span></span><span class="num">12</span><span class="num">244</span><span class="ip">239.10.1.13</span><button class="btn small"><i data-i="plus" data-s="13"></i> Réserver</button></div>
+        <div class="res-row"><span class="ip">239.10.2.0/24</span><span>Caméras · audio Rouge</span><span><span class="vlan-tag" style="--vlan:#2dd4bf"><span class="vlan-sw"></span><b>110</b> Rouge</span></span><span class="num">12</span><span class="num">244</span><span class="ip">239.10.2.13</span><button class="btn small"><i data-i="plus" data-s="13"></i> Réserver</button></div>
+        <div class="res-row"><span class="ip">239.10.9.0/24</span><span>Mélangeur · sorties</span><span><span class="vlan-tag" style="--vlan:#2dd4bf"><span class="vlan-sw"></span><b>110</b> Rouge</span></span><span class="num warn-t">6</span><span class="num">250</span><span class="ip">239.10.9.11</span><button class="btn small"><i data-i="plus" data-s="13"></i> Réserver</button></div>
+        <div class="res-row"><span class="ip">239.20.1.0/24</span><span>Caméras · vidéo Bleu</span><span><span class="vlan-tag" style="--vlan:#e879f9"><span class="vlan-sw"></span><b>120</b> Bleu</span></span><span class="num">12</span><span class="num">244</span><span class="ip">239.20.1.13</span><button class="btn small"><i data-i="plus" data-s="13"></i> Réserver</button></div>
+        <div class="res-row"><span class="ip">239.69.0.0/16</span><span class="muted2">Hors plan</span><span>—</span><span class="num">4</span><span class="num">—</span><span>—</span><button class="btn small">Créer une plage</button></div>
+      </div>
+    </div>
+
+    <!-- ── PTP ── -->
+    <div class="tabpane" data-t="ptp">
+      <div class="health-grid">
+        <div class="hcard"><h3><i data-i="timer" data-s="14"></i> Grandmaster</h3><div class="gm"><b>gm-meinberg-01</b><span class="badge-gm">Actif</span></div><span class="ip muted2">EC:46:70:FF:FE:00:1A:2B · 10.99.0.47</span><div class="hrow"><span class="grow">Domaine · priorité 1 / 2</span><span class="mono">127 · 128 / 128</span></div><div class="hrow"><span class="grow">Classe · précision</span><span class="mono">6 · 100 ns</span></div><div class="hrow"><span class="grow">Source</span><span class="mono">GPS</span></div></div>
+        <div class="hcard"><h3><i data-i="timer" data-s="14"></i> Secours</h3><div class="gm"><b>gm-meinberg-02</b><span class="badge-gm bk">En attente</span></div><span class="ip muted2">EC:46:70:FF:FE:00:1A:3C · 10.99.0.48</span><div class="hrow"><span class="grow">Domaine · priorité 1 / 2</span><span class="mono">127 · 128 / 129</span></div><div class="hrow"><span class="grow">Classe · précision</span><span class="mono">6 · 100 ns</span></div><div class="hrow"><span class="grow">Source</span><span class="mono">GPS</span></div></div>
+        <div class="hcard"><h3><i data-i="activity" data-s="14"></i> Changements</h3><div class="hrow"><span class="grow">Dernier changement de maître</span><span class="mono">12 nov., 04:10</span></div><div class="hrow"><span class="grow">Annonces / s</span><span class="mono">8</span></div><div class="hrow"><span class="grow">Esclaves vus</span><span class="mono">12</span></div></div>
+      </div>
+      <table class="pt">
+        <colgroup><col style="width:22%"><col style="width:140px"><col style="width:120px"><col style="width:90px"><col><col style="width:150px"></colgroup>
+        <thead><tr><th>Appareil</th><th>IP</th><th>Rôle</th><th class="num">Domaine</th><th>Raccordement</th><th>Dernier message</th></tr></thead>
+        <tbody>
+          <tr><td>gm-meinberg-01</td><td class="ip">10.99.0.47</td><td><span class="st used">Maître</span></td><td class="num ip">127</td><td>SW-Plateau-N9K-02 · <span class="ip">Eth1/47</span></td><td>il y a 0 s</td></tr>
+          <tr><td>gm-meinberg-02</td><td class="ip">10.99.0.48</td><td><span class="muted2">Secours</span></td><td class="num ip">127</td><td>SW-Plateau-N9K-03 · <span class="ip">Eth1/47</span></td><td>il y a 1 s</td></tr>
+          <tr><td>cam-01-red</td><td class="ip">10.10.1.11</td><td>Esclave</td><td class="num ip">127</td><td>SW-Plateau-N9K-02 · <span class="ip">Eth1/1</span></td><td>il y a 1 s</td></tr>
+          <tr><td>mixer-a</td><td class="ip">10.10.1.40</td><td>Esclave</td><td class="num ip">127</td><td>SW-Plateau-N9K-02 · <span class="ip">Eth1/9</span></td><td>il y a 0 s</td></tr>
+          <tr><td>encodeur-srt</td><td class="ip">10.10.1.70</td><td>Esclave</td><td class="num ip warn-t">0</td><td>SW-Plateau-N9K-02 · <span class="ip">Eth1/7</span></td><td>il y a 2 s</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ── Services (inchangé) ── -->
+    <div class="tabpane" data-t="services">
+      <table class="pt"><thead><tr><th>Type</th><th>Nom</th><th>Machine</th><th>IP</th><th>Port</th></tr></thead>
+        <tbody><tr><td>NMOS Node</td><td>cam-01-red</td><td>cam-01-red.local</td><td class="ip">10.10.1.11</td><td class="ip">80</td></tr><tr><td>NMOS Registry</td><td>registry-01</td><td>nmos-reg.local</td><td class="ip">10.99.0.60</td><td class="ip">8010</td></tr></tbody></table>
+    </div>
+  </div></main>
+</div>
+</div></div></div>
+
+<div class="mk-switch">Maquette
+  <div class="lang-switch theme-switch"><button class="on" data-theme-set="dark">Sombre</button><button data-theme-set="light">Clair</button></div>
+</div>
+
+<script>
+const CHEV = '<i data-i="chevron-down" data-s="12"></i>';
+const T = { v: ['v', 'Vidéo'], a: ['a', 'Audio'], d: ['d', 'Données'], ts: ['ts', 'MPEG-TS'] };
+// [état, groupe:port, nom|null, type, format, émetteur, ip, switch·port, récepteurs [n, chips], débit, paire]
+const F = [
+  ['ok', '239.10.1.1:5004', 'CAM-01 Vidéo', 'v', '1080p50 · 4:2:2 10 bits', 'cam-01-red', '10.10.1.11', 'N9K-02 Eth1/1', [3, ['N9K-03 Eth1/9', 'N9K-03 Eth1/33', 'Core Po1']], '2,60 Gb/s', 'rb', true],
+  ['ok', '239.10.2.1:5004', 'CAM-01 Audio', 'a', 'L24 · 48 kHz · 8 voies', 'cam-01-red', '10.10.1.11', 'N9K-02 Eth1/1', [2, ['N9K-03 Eth1/9', 'Core Po1']], '9,4 Mb/s', 'rb'],
+  ['ok', '239.10.3.1:5004', 'CAM-01 Données', 'd', 'ST 2110-40 · ANC', 'cam-01-red', '10.10.1.11', 'N9K-02 Eth1/1', [1, ['N9K-03 Eth1/9']], '0,2 Mb/s', 'rb'],
+  ['ok', '239.10.1.2:5004', 'CAM-02 Vidéo', 'v', '1080p50 · 4:2:2 10 bits', 'cam-02-red', '10.10.1.12', 'N9K-02 Eth1/3', [2, ['N9K-03 Eth1/9', 'N9K-03 Eth1/33']], '2,60 Gb/s', 'rX'],
+  ['warn', '239.10.9.10:5004', 'Mélangeur PGM', 'v', '1080p50 · 4:2:2 10 bits', 'mixer-a / mixer-b', '2 sources', 'N9K-03 Eth1/9 · Eth1/10', [4, ['N9K-02 Eth1/7', 'N9K-03 Eth1/33', 'Core Po1', 'Core Po2']], '5,20 Gb/s', 'rb'],
+  ['ok', '239.10.9.20:5004', 'Mélangeur PGM Audio', 'a', 'L24 · 48 kHz · 16 voies', 'mixer-a', '10.10.1.40', 'N9K-03 Eth1/9', [0, []], '18,8 Mb/s', 'rb'],
+  ['unk', '239.69.4.10:5004', null, 'a', 'L24 · 48 kHz · 2 voies', 'dante-bridge-01', '10.10.1.90', 'N9K-02 Eth1/21', [1, ['N9K-02 Eth1/49']], '2,4 Mb/s', ''],
+  ['ok', '239.30.0.5:1234', 'Retour antenne SRT', 'ts', 'H.264 · 12 Mb/s', 'encodeur-srt', '10.10.1.70', 'N9K-02 Eth1/7', [2, ['Régie Gi1/0/20', 'Régie Gi1/0/22']], '12,6 Mb/s', ''],
+  ['off', '239.10.1.4:5004', 'CAM-04 Vidéo', 'v', '1080p50 · 4:2:2 10 bits', 'cam-04-red', '10.10.1.14', 'N9K-02 Eth1/7', [0, []], '—', 'rb'],
+];
+const dot = { ok: 'ok', warn: 'warn', unk: 'warn', off: 'free' };
+const pair = (p) => p === 'rb' ? '<span class="pair"><i class="r">R</i><i class="b">B</i></span>' : p === 'rX' ? '<span class="pair"><i class="r">R</i><i class="x">B</i></span>' : '<span class="muted2">—</span>';
+let rows = '';
+for (const [st, grp, name, ty, fmt, src, ip, sp, [n, chips], rate, pr, open] of F) {
+  rows += `<tr class="${open ? 'open' : ''}">
+    <td><span class="nav-dot ${dot[st]}" style="display:inline-block;width:8px;height:8px"></span></td>
+    <td class="ip">${grp}</td>
+    <td>${name ? name : '<span class="muted2">—</span><span class="unk">Non annoncé</span>'}</td>
+    <td><span class="tchip ${T[ty][0]}">${T[ty][1]}</span></td>
+    <td class="muted">${fmt}</td>
+    <td><span class="src">${src}<small>${sp}</small></span></td>
+    <td><div class="rx"><b class="${n ? '' : 'warn-t'}">${n}</b><div class="ports-list">${chips.map((c) => `<span class="pchip ${c.startsWith('Core') ? 'router' : ''}">${c}</span>`).join('')}</div></div></td>
+    <td class="num ip">${rate}</td>
+    <td>${pair(pr)}</td>
+    <td><button class="exp">${CHEV}</button></td></tr>`;
+  if (open) rows += `<tr class="detail"><td colspan="10"><div class="det">
+    <div><div class="path">
+      <div class="node src-n"><b><i data-i="video" data-s="13"></i> cam-01-red</b><span class="ip">10.10.1.11 · émetteur</span></div>
+      <div class="wire">Eth1/1</div>
+      <div class="node"><b><i data-i="ethernet-port" data-s="13"></i> SW-Plateau-N9K-02</b><span class="ip">IGMP : 1 port</span></div>
+      <div class="wire">Po1</div>
+      <div class="node"><b><i data-i="ethernet-port" data-s="13"></i> SW-Core-01</b><span class="ip">IGMP : 2 ports</span></div>
+      <div class="wire">Po2</div>
+      <div class="node"><b><i data-i="ethernet-port" data-s="13"></i> SW-Plateau-N9K-03</b><span class="ip">IGMP : 2 ports</span></div>
+      <div class="wire">Eth1/9 · 1/33</div>
+      <div class="node rcv"><b><i data-i="users" data-s="13"></i> 2 récepteurs</b><div class="pl"><span class="pchip">mixer-a</span><span class="pchip">multiviewer</span></div></div>
+    </div>
+    </div><div class="det-actions"><button class="btn small"><i data-i="activity" data-s="13"></i> Mesurer 2 s</button><button class="btn small"><i data-i="file-text" data-s="13"></i> SDP</button><button class="btn small"><i data-i="git-compare-arrows" data-s="13"></i> Voir le flux Bleu</button></div>
+    <div class="kv"><span>Annonce</span><b>SAP · il y a 12 s</b><span>Encodage</span><b>raw · YCbCr 4:2:2 · 10 bits</b><span>Image</span><b>1920×1080 · 50p</b><span>Horloge</span><b>PTP · gm-meinberg-01 · 127</b><span>Débit (SDP)</span><b>2,60 Gb/s</b><span>Bleu</span><b>239.20.1.1:5004 · N9K-02 Eth1/2</b></div>
+  </div></td></tr>`;
+}
+document.getElementById('flows').innerHTML = rows;
+// Plan : 3 lignes de 256 groupes
+const lines = [['239.10.1.x', 12, [], []], ['239.10.9.x', 6, [10], [11, 12, 13, 14, 15, 16]], ['239.20.1.x', 12, [], [13, 14, 15, 16, 17, 18]]];
+document.getElementById('occ').innerHTML = lines.map(([l, used, conf, resv]) => `<div class="occ-line"><span class="occ-label">${l}</span><div class="occ">${Array.from({ length: 256 }, (_, i) => `<i class="${i === 0 || i === 255 ? 'na' : conf.includes(i) ? 'off' : i >= 1 && i <= used ? 'used' : resv.includes(i) ? 'resv' : ''}"></i>`).join('')}</div></div>`).join('');
+document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.tabpane').forEach((x) => x.classList.toggle('on', x.dataset.t === b.dataset.t));
+}));
+document.querySelectorAll('[data-theme-set]').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.themeSet === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
+  document.querySelectorAll('[data-theme-set]').forEach((x) => x.classList.toggle('on', x === b));
+}));
+</script>
+</body>
+</html>

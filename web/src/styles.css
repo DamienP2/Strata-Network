@@ -820,7 +820,8 @@ tr:hover .dd-btn.cell > svg, .dd-btn.cell.open > svg { opacity: 1; }
 .err { font: 11.5px var(--mono); color: var(--text-3); }
 .err.bad { color: var(--live); font-weight: 600; }
 .pt td.num, .pt th.num { text-align: right; }
-.descr { flex: none; color: var(--text-3); font-size: 11.5px; }
+.descr { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: 11.5px; }
+.ed:has(> .descr) > span:first-child { flex: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ed.ro, tr:hover .ed.ro { border-color: transparent; background: none; cursor: default; }
 .sw-legend > .gap { margin-left: 10px; }
 
