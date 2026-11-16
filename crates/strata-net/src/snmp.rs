@@ -346,6 +346,197 @@ pub mod oids {
     pub const LLDP_REM_SYS_NAME: &str = "1.0.8802.1.1.2.1.4.1.1.9";
     pub const MROUTE_OCTETS: &str = "1.3.6.1.2.1.83.1.1.2.1.10"; // ipMRouteOctets.group.source.mask
     pub const MROUTE_PKTS: &str = "1.3.6.1.2.1.83.1.1.2.1.8";
+    // System and chassis (ENTITY-MIB)
+    pub const SYS_UPTIME: &str = "1.3.6.1.2.1.1.3.0";
+    pub const SYS_CONTACT: &str = "1.3.6.1.2.1.1.4.0";
+    pub const SYS_LOCATION: &str = "1.3.6.1.2.1.1.6.0";
+    pub const ENT_CLASS: &str = "1.3.6.1.2.1.47.1.1.1.1.5"; // 3 = chassis
+    pub const ENT_FIRMWARE: &str = "1.3.6.1.2.1.47.1.1.1.1.9";
+    pub const ENT_SOFTWARE: &str = "1.3.6.1.2.1.47.1.1.1.1.10";
+    pub const ENT_SERIAL: &str = "1.3.6.1.2.1.47.1.1.1.1.11";
+    pub const ENT_MODEL: &str = "1.3.6.1.2.1.47.1.1.1.1.13";
+    // Interfaces (IF-MIB)
+    pub const IF_ADMIN: &str = "1.3.6.1.2.1.2.2.1.7";
+    pub const IF_OPER: &str = "1.3.6.1.2.1.2.2.1.8";
+    pub const IF_IN_ERRORS: &str = "1.3.6.1.2.1.2.2.1.14";
+    pub const IF_OUT_ERRORS: &str = "1.3.6.1.2.1.2.2.1.20";
+    pub const IF_HC_IN: &str = "1.3.6.1.2.1.31.1.1.1.6";
+    pub const IF_HC_OUT: &str = "1.3.6.1.2.1.31.1.1.1.10";
+    pub const IF_HIGH_SPEED: &str = "1.3.6.1.2.1.31.1.1.1.15"; // Mb/s
+    pub const IF_ALIAS: &str = "1.3.6.1.2.1.31.1.1.1.18";
+    // VLANs (Q-BRIDGE-MIB)
+    pub const Q_PVID: &str = "1.3.6.1.2.1.17.7.1.4.5.1.1"; // dot1qPvid.bridgePort
+    pub const Q_VLAN_NAME: &str = "1.3.6.1.2.1.17.7.1.4.3.1.1"; // dot1qVlanStaticName.vlan
+    pub const Q_VLAN_EGRESS: &str = "1.3.6.1.2.1.17.7.1.4.3.1.2"; // dot1qVlanStaticEgressPorts.vlan
+    pub const Q_VLAN_UNTAGGED: &str = "1.3.6.1.2.1.17.7.1.4.3.1.4"; // dot1qVlanStaticUntaggedPorts.vlan
+}
+
+/// What a switch says about itself.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct System {
+    pub name: String,
+    pub description: String,
+    pub uptime_secs: u64,
+    pub contact: String,
+    pub location: String,
+    pub model: String,
+    pub serial: String,
+    pub firmware: String,
+}
+
+/// Reads the switch's identity: system group, and the chassis entry of ENTITY-MIB when present.
+pub async fn system(s: &Session) -> io::Result<System> {
+    let v = s
+        .get(&[Oid::parse(oids::SYS_NAME), Oid::parse(oids::SYS_DESCR), Oid::parse(oids::SYS_UPTIME), Oid::parse(oids::SYS_CONTACT), Oid::parse(oids::SYS_LOCATION)])
+        .await?;
+    let text = |i: usize| v.get(i).and_then(|(_, v)| v.as_text()).unwrap_or_default();
+    let mut out = System {
+        name: text(0),
+        description: text(1).lines().next().unwrap_or_default().to_string(),
+        uptime_secs: v.get(2).and_then(|(_, v)| v.as_u64()).unwrap_or(0) / 100,
+        contact: text(3),
+        location: text(4),
+        ..System::default()
+    };
+    // The first chassis (class 3) of the entity table.
+    let class = Oid::parse(oids::ENT_CLASS);
+    let chassis = s.walk(&class, 2000).await.unwrap_or_default().into_iter().find(|(_, v)| v.as_u64() == Some(3)).and_then(|(o, _)| o.suffix(&class).first().copied());
+    if let Some(i) = chassis {
+        let at = |base: &str| Oid::parse(base).child(i);
+        if let Ok(e) = s.get(&[at(oids::ENT_MODEL), at(oids::ENT_SERIAL), at(oids::ENT_SOFTWARE), at(oids::ENT_FIRMWARE)]).await {
+            let t = |k: usize| e.get(k).and_then(|(_, v)| v.as_text()).unwrap_or_default();
+            out.model = t(0);
+            out.serial = t(1);
+            out.firmware = if t(2).is_empty() { t(3) } else { t(2) };
+        }
+    }
+    Ok(out)
+}
+
+/// One interface at one moment: state, speed and counters.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IfStat {
+    pub if_index: u32,
+    pub name: String,
+    pub alias: String,
+    /// Administratively enabled.
+    pub admin_up: bool,
+    /// Link up.
+    pub up: bool,
+    pub speed_mbps: u64,
+    pub in_octets: u64,
+    pub out_octets: u64,
+    pub in_errors: u64,
+    pub out_errors: u64,
+}
+
+/// Every interface's state and counters (64-bit counters).
+pub async fn if_stats(s: &Session) -> io::Result<Vec<IfStat>> {
+    let mut by: std::collections::BTreeMap<u32, IfStat> = std::collections::BTreeMap::new();
+    for (col, base) in [
+        (0, oids::IF_NAME),
+        (1, oids::IF_ALIAS),
+        (2, oids::IF_ADMIN),
+        (3, oids::IF_OPER),
+        (4, oids::IF_HIGH_SPEED),
+        (5, oids::IF_HC_IN),
+        (6, oids::IF_HC_OUT),
+        (7, oids::IF_IN_ERRORS),
+        (8, oids::IF_OUT_ERRORS),
+    ] {
+        let base = Oid::parse(base);
+        let rows = s.walk(&base, 20_000).await;
+        // The name column must answer; the others may be missing on small switches.
+        let rows = if col == 0 { rows? } else { rows.unwrap_or_default() };
+        for (o, v) in rows {
+            let Some(i) = o.suffix(&base).first().copied() else { continue };
+            let e = by.entry(i).or_insert_with(|| IfStat { if_index: i, ..IfStat::default() });
+            let n = v.as_u64().unwrap_or(0);
+            match col {
+                0 => e.name = v.as_text().unwrap_or_default(),
+                1 => e.alias = v.as_text().unwrap_or_default(),
+                2 => e.admin_up = n == 1,
+                3 => e.up = n == 1,
+                4 => e.speed_mbps = n,
+                5 => e.in_octets = n,
+                6 => e.out_octets = n,
+                7 => e.in_errors = n,
+                _ => e.out_errors = n,
+            }
+        }
+    }
+    Ok(by.into_values().collect())
+}
+
+/// The VLAN setup of a switch, by interface.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VlanSetup {
+    /// Native (untagged ingress) VLAN by ifIndex.
+    pub pvid: HashMap<u32, u16>,
+    /// VLANs carried untagged / tagged by ifIndex.
+    pub untagged: HashMap<u32, Vec<u16>>,
+    pub tagged: HashMap<u32, Vec<u16>>,
+    /// Names of the VLANs declared on the switch.
+    pub names: HashMap<u16, String>,
+}
+
+/// The bridge ports set in a Q-BRIDGE port list (first byte = ports 1..8, high bit first).
+pub fn port_list(bytes: &[u8]) -> Vec<u32> {
+    let mut out = Vec::new();
+    for (i, b) in bytes.iter().enumerate() {
+        for bit in 0..8 {
+            if b & (0x80 >> bit) != 0 {
+                out.push((i * 8 + bit + 1) as u32);
+            }
+        }
+    }
+    out
+}
+
+/// Reads PVIDs and the static VLAN memberships (Q-BRIDGE-MIB).
+pub async fn vlan_setup(s: &Session) -> io::Result<VlanSetup> {
+    let bp = Oid::parse(oids::BRIDGE_PORT_IF);
+    let to_if: HashMap<u32, u32> =
+        s.walk(&bp, 20_000).await.unwrap_or_default().into_iter().filter_map(|(o, v)| Some((*o.suffix(&bp).first()?, v.as_u64()? as u32))).collect();
+    let ifx = |port: u32| to_if.get(&port).copied().unwrap_or(port);
+    let mut out = VlanSetup::default();
+    let pv = Oid::parse(oids::Q_PVID);
+    for (o, v) in s.walk(&pv, 20_000).await? {
+        if let (Some(p), Some(vlan)) = (o.suffix(&pv).first(), v.as_u64()) {
+            out.pvid.insert(ifx(*p), vlan as u16);
+        }
+    }
+    let name = Oid::parse(oids::Q_VLAN_NAME);
+    for (o, v) in s.walk(&name, 5_000).await.unwrap_or_default() {
+        if let Some(vlan) = o.suffix(&name).first() {
+            out.names.insert(*vlan as u16, v.as_text().unwrap_or_default());
+        }
+    }
+    let mut untagged_of: HashMap<u16, Vec<u32>> = HashMap::new();
+    let un = Oid::parse(oids::Q_VLAN_UNTAGGED);
+    for (o, v) in s.walk(&un, 5_000).await.unwrap_or_default() {
+        if let (Some(vlan), Value::Bytes(b)) = (o.suffix(&un).first(), &v) {
+            untagged_of.insert(*vlan as u16, port_list(b).into_iter().map(ifx).collect());
+        }
+    }
+    let eg = Oid::parse(oids::Q_VLAN_EGRESS);
+    for (o, v) in s.walk(&eg, 5_000).await.unwrap_or_default() {
+        let (Some(vlan), Value::Bytes(b)) = (o.suffix(&eg).first(), &v) else { continue };
+        let vlan = *vlan as u16;
+        let untagged = untagged_of.get(&vlan).cloned().unwrap_or_default();
+        for i in port_list(b).into_iter().map(ifx) {
+            let list = if untagged.contains(&i) { &mut out.untagged } else { &mut out.tagged };
+            list.entry(i).or_default().push(vlan);
+        }
+    }
+    for l in out.untagged.values_mut().chain(out.tagged.values_mut()) {
+        l.sort_unstable();
+        l.dedup();
+    }
+    Ok(out)
 }
 
 /// Who the agent is.
@@ -509,6 +700,12 @@ mod tests {
         assert_eq!(read_int(&int(-129)[2..]), -129);
         assert_eq!(read_int(&int(128)[2..]), 128);
         assert_eq!(int(0), vec![2, 1, 0]);
+    }
+
+    #[test]
+    fn port_lists() {
+        assert_eq!(port_list(&[0b1000_0001, 0b0100_0000]), vec![1, 8, 10]);
+        assert!(port_list(&[0, 0]).is_empty());
     }
 
     #[test]

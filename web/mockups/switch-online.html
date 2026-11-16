@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Strata Network — switch en ligne</title>
+<!--CSS-->
+<link rel="stylesheet" href="../src/styles.css" />
+<link rel="stylesheet" href="../src/styles-light.css" />
+<!--/CSS-->
+<style>
+/* ── Maquette seulement ── */
+[hidden] { display: none !important; }
+.mk-switch { position: fixed; left: 18px; bottom: 16px; z-index: 400; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--line-2); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); font-size: 12px; color: var(--text-2); }
+
+.page-2 { height: 100%; display: grid; grid-template-columns: 240px minmax(0, 1fr); }
+.page-2 > .library { min-width: 0; }
+.library-inner.full { max-width: none; padding-left: 20px; padding-right: 20px; }
+.ip { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.muted2 { color: var(--text-3); }
+
+/* En ligne : l'interrupteur et son état dans l'en-tête */
+.live { display: inline-flex; align-items: center; gap: 10px; height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); }
+.live.on { border-color: color-mix(in srgb, var(--pvw) 55%, transparent); background: color-mix(in srgb, var(--pvw) 8%, var(--panel)); }
+.live .check { color: var(--text); font-weight: 600; }
+.live-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+.live-state::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--pvw); box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18); animation: blink 2s infinite; }
+.live .dd-btn { width: 76px; height: 24px; }
+
+/* Ce que le switch dit de lui-même */
+.sys-strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.sys-strip > div { padding: 10px 14px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.sys-strip > div + div { border-left: 1px solid var(--line); }
+.sys-strip .set-label { font-size: 11px; }
+.sys-strip b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sys-strip b.mono { font: 600 12.5px var(--mono); }
+
+/* Écarts entre l'inventaire et le switch */
+.diffs { display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 14px; border-radius: 10px; background: rgba(245, 165, 36, 0.1); border: 1px solid rgba(245, 165, 36, 0.45); color: var(--text); font-size: 12.5px; }
+.diffs svg { color: var(--warn); flex: none; }
+.diff { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 10px; background: rgba(245, 165, 36, 0.15); color: var(--warn); cursor: help; }
+.pt tr.has-diff td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.take { height: 22px; padding: 0 7px; font-size: 11px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel-3); color: var(--text-2); cursor: pointer; }
+.take:hover { color: var(--text); border-color: var(--text-3); }
+
+/* Façade en ligne : lien allumé / éteint, et la charge du port en bas de chaque prise */
+.sw-face.live-face .sw-port .link { background: #22c55e; box-shadow: 0 0 5px #22c55e; }
+.sw-face.live-face .sw-port.down { opacity: 0.55; }
+.sw-face.live-face .sw-port.down .link { background: #4b5068; box-shadow: none; }
+.sw-port .load { position: absolute; left: 2px; right: 2px; bottom: 2px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.sw-port .load i { position: absolute; inset: 0 auto 0 0; background: #e6e8f2; border-radius: 2px; }
+.sw-port .load i.hot { background: #f5a524; }
+
+/* Colonnes en ligne du tableau des ports */
+.lk { display: inline-flex; align-items: center; gap: 6px; font: 600 11.5px var(--mono); }
+.lk::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--line-2); }
+.lk.up { color: var(--text); }
+.lk.up::before { background: var(--pvw); box-shadow: 0 0 6px var(--pvw); }
+.lk.down { color: var(--text-3); font-weight: 500; }
+.lk.admin-off::before { background: none; box-shadow: inset 0 0 0 1.5px var(--line-2); }
+.rate { display: flex; align-items: center; gap: 8px; }
+.rate svg { flex: none; color: var(--accent); }
+.rate .io { display: flex; flex-direction: column; line-height: 1.15; font: 11px var(--mono); }
+.rate .io span:first-child { color: var(--text); }
+.rate .io span:last-child { color: var(--text-3); }
+.err { font: 11.5px var(--mono); color: var(--text-3); }
+.err.bad { color: var(--live); font-weight: 600; }
+.pt td.num, .pt th.num { text-align: right; }
+.vlan-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 1px 7px 1px 5px; border-radius: 10px; white-space: nowrap; background: color-mix(in srgb, var(--vlan) 16%, transparent); color: var(--text); }
+.vlan-tag .vlan-sw { width: 8px; height: 8px; border-radius: 2px; background: var(--vlan); }
+.vlan-tag b { font-family: var(--mono); font-weight: 600; }
+.vlan-sw { width: 10px; height: 10px; border-radius: 3px; background: var(--vlan, var(--text-3)); flex: none; display: inline-block; }
+.ed { display: flex; align-items: center; gap: 6px; height: 26px; margin: 0 -6px; padding: 0 6px; border-radius: 6px; border: 1px solid transparent; overflow: hidden; }
+tr:hover .ed { border-color: var(--line); background: var(--panel-3); }
+.ed .ph { color: var(--text-3); }
+.pt .segmented button { padding: 2px 7px; font-size: 11px; }
+.tick { appearance: none; width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--line-2); background: var(--panel-3); cursor: pointer; margin: 0; vertical-align: middle; }
+.descr { color: var(--text-3); font-size: 11.5px; margin-left: 6px; }
+</style>
+</head>
+<body>
+<div id="root"><div class="app">
+<nav class="topbar">
+  <div class="brand"><span class="brand-lockup">
+    <svg class="brand-f-lead" viewBox="93.8 -0.2 52.3 52.95" width="23.7" height="24" aria-hidden="true"><path fill="currentColor" d="M145.93,22.93v-10.33h-35.97c2.12,2.08,7.43,7.77,7.92,13.05-.05-.42-.28-1.57-1.25-3.27-.98-1.72-2.72-4-5.8-6.66-.03-.03-.06-.05-.09-.08-1.11-.96-2.39-1.98-3.87-3.03C98.07,5.95,95.14,2.38,94.38.01c0,0-2.69,9.66,4.5,17.36,0,0-1.74-.36-3.41-1.02,0,0,2.98,7.41,11.12,11.33,0,0-2.11.07-3.92-.14,0,0,1.93,2.92,7.66,5.88v8.46c0,.57-.46,1.04-1.04,1.04h-3.97v7.83h24.8v-7.85h-3.76c-.57,0-1.04-.46-1.04-1.04v-3.41c1.19.21,4.51,1.95,5.96,3.12,3.92,3.17,8.11,8.05,8.11,8.05l1.83,1.13s-5.07-6.05-8.33-9.3c-2.27-2.27-6.1-6.1-6.1-6.1l-.2-.22h9.57v-7.19h-10.82v-7.51l9.78-.04c.58,0,1.04.46,1.04,1.04v1.5h9.8-.03Z"/></svg>
+    <span class="brand-name">Strata</span><span class="brand-module">Network</span>
+  </span></div>
+  <div class="tabs home-tabs">
+    <button><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.07 4.93A10 10 0 0 0 6.99 3.34" /><path d="M4 6h.01" /><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35" /><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67" /><path d="M12 18h.01" /><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67" /><circle cx="12" cy="12" r="2" /><path d="m13.41 10.59 5.66-5.66" /></svg> <span class="tab-label">Scan</span></button>
+    <button class="on"><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 20 3-3h2a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2l3 3z" /><path d="M6 8v1" /><path d="M10 8v1" /><path d="M14 8v1" /><path d="M18 8v1" /></svg> <span class="tab-label">Switchs</span></button>
+    <button><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9" /><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5" /><circle cx="12" cy="12" r="2" /><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5" /><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19" /></svg> <span class="tab-label">Multicast</span></button>
+    <button><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12h-8" /><path d="M21 6H8" /><path d="M21 18h-8" /><path d="M3 6v4c0 1.1.9 2 2 2h3" /><path d="M3 10v6c0 1.1.9 2 2 2h3" /></svg> <span class="tab-label">Topologie</span></button>
+    <button><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></svg> <span class="tab-label">Alertes</span></button>
+    <button><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2" ry="2" /><rect width="20" height="8" x="2" y="14" rx="2" ry="2" /><line x1="6" x2="6.01" y1="6" y2="6" /><line x1="6" x2="6.01" y1="18" y2="18" /></svg> <span class="tab-label">Système</span></button>
+  </div>
+  <div class="spacer"></div>
+  <span class="ux1-pill"><span class="ux1-dot"></span>Connecté</span>
+  <button class="learn-help" title="Aide"><svg xmlns="http://www.w3.org/2000/svg" class="" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><path d="M12 17h.01" /></svg></button>
+  <div class="ux1-user"><button class="ux1-user-btn named"><span class="avatar">D</span><span class="user-name">Damien</span><svg xmlns="http://www.w3.org/2000/svg" class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></button></div>
+</nav>
+<div class="content">
+<div class="page-2">
+  <aside class="lib-nav">
+    <div class="lib-nav-section"><span style="flex:1">Cœur</span><button class="icon-btn ghost" title="Nouveau switch" style="width:22px;height:22px"><svg xmlns="http://www.w3.org/2000/svg" class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14" /><path d="M12 5v14" /></svg></button></div>
+    <div class="lib-nav-item"><svg xmlns="http://www.w3.org/2000/svg" class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 20 3-3h2a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2l3 3z" /><path d="M6 8v1" /><path d="M10 8v1" /><path d="M14 8v1" /><path d="M18 8v1" /></svg><span class="grow">SW-Core-01</span><span class="nav-dot ok" title="En ligne"></span><span class="count">24</span></div>
+    <div class="lib-nav-section"><span>Régie</span></div>
+    <div class="lib-nav-item on"><svg xmlns="http://www.w3.org/2000/svg" class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 20 3-3h2a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2l3 3z" /><path d="M6 8v1" /><path d="M10 8v1" /><path d="M14 8v1" /><path d="M18 8v1" /></svg><span class="grow">SW-Régie-01</span><span class="nav-dot ok" title="En ligne"></span><span class="count">52</span></div>
+    <div class="lib-nav-item"><svg xmlns="http://www.w3.org/2000/svg" class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 20 3-3h2a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2l3 3z" /><path d="M6 8v1" /><path d="M10 8v1" /><path d="M14 8v1" /><path d="M18 8v1" /></svg><span class="grow">SW-Régie-02</span><span class="count">10</span></div>
+    <div class="lib-nav-section"><span>Plateau B</span></div>
+    <div class="lib-nav-item"><svg xmlns="http://www.w3.org/2000/svg" class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 20 3-3h2a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2l3 3z" /><path d="M6 8v1" /><path d="M10 8v1" /><path d="M14 8v1" /><path d="M18 8v1" /></svg><span class="grow">SW-Audio-01</span><span class="count">26</span></div>
+  </aside>
+  <main class="library"><div class="library-inner full">
+    <div class="settings-head">
+      <div><h1>SW-Régie-01</h1><p class="muted">Cisco C9300-48P · <span class="ip">10.99.0.11</span> · Régie · 48 + 4 ports</p></div>
+      <div class="spacer"></div>
+      <div class="live on">
+        <label class="check"><input type="checkbox" checked /> En ligne</label>
+        <span class="live-state">lu il y a 4 s</span>
+        <button class="dd-btn" title="Fréquence de lecture"><span class="dd-label">10 s</span><svg xmlns="http://www.w3.org/2000/svg" class="" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></button>
+      </div>
+      <button class="btn"><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" /></svg> Modifier</button>
+    </div>
+
+    <div class="sys-strip">
+      <div><span class="set-label">Nom dans le switch</span><b>sw-regie-01.lan</b></div>
+      <div><span class="set-label">Modèle</span><b>C9300-48P</b></div>
+      <div><span class="set-label">Firmware</span><b class="mono">IOS-XE 17.9.4a</b></div>
+      <div><span class="set-label">N° de série</span><b class="mono">FOC2412X0ZK</b></div>
+      <div><span class="set-label">En marche depuis</span><b>42 j 6 h</b></div>
+      <div><span class="set-label">Emplacement</span><b>Baie Régie R2</b></div>
+    </div>
+
+    <div class="diffs"><svg xmlns="http://www.w3.org/2000/svg" class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /><path d="M12 9v4" /><path d="M12 17h.01" /></svg><span><b>3 ports</b> ne sont pas configurés dans le switch comme dans l’inventaire</span><div class="spacer"></div><button class="btn small">Voir les écarts</button><button class="btn small">Tout reprendre du switch</button></div>
+
+    <div class="media-toolbar">
+      <label class="search" style="width:240px"><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg><input placeholder="Port, libellé, machine" /></label>
+      <div class="asr-chips">
+        <button class="asr-chip on">Tous les ports <span class="asr-chip-n">52</span></button>
+        <button class="asr-chip">Lien actif <span class="asr-chip-n">19</span></button>
+        <button class="asr-chip">Sans lien <span class="asr-chip-n">33</span></button>
+        <button class="asr-chip">Écarts <span class="asr-chip-n">3</span></button>
+        <button class="asr-chip">Erreurs <span class="asr-chip-n">1</span></button>
+        <button class="asr-chip">Trunks <span class="asr-chip-n">3</span></button>
+      </div>
+    </div>
+
+    <div class="sw-face live-face" id="face"></div>
+    <div class="sw-legend" id="legend"></div>
+
+    <table class="pt">
+      <colgroup><col style="width:34px"><col style="width:118px"><col style="width:15%"><col style="width:142px"><col style="width:17%"><col style="width:96px"><col style="width:170px"><col style="width:74px"><col></colgroup>
+      <thead><tr><th><input type="checkbox" class="tick"></th><th>Port</th><th>Libellé</th><th>Mode</th><th>VLAN</th><th>Lien</th><th>Débit ↓ / ↑</th><th class="num">Erreurs</th><th>Raccordé à</th></tr></thead>
+      <tbody id="ports"></tbody>
+    </table>
+  </div></main>
+</div>
+</div></div></div>
+
+<div class="mk-switch">Maquette
+  <div class="lang-switch theme-switch"><button class="on" data-theme-set="dark">Sombre</button><button data-theme-set="light">Clair</button></div>
+</div>
+
+<script>
+const CHEV = '<svg xmlns="http://www.w3.org/2000/svg" class="" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>';
+const V = { 10: ['#22c55e', 'Régie'], 20: ['#8fa3ff', 'Caméras'], 30: ['#f5c542', 'Audio'], 99: ['#ff3b5c', 'Management'] };
+const vtag = (id) => `<span class="vlan-tag" style="--vlan:${V[id][0]}"><span class="vlan-sw"></span><b>${id}</b> ${V[id][1]}</span>`;
+// [label, mode, vlan, tagged, host, up, speed, inMbps, outMbps, errors, diff, descr]
+const P = {
+  1: ['vMix Prod', 'access', 10, [], 'vMix Prod · 10.10.0.120', 1, '1G', 412, 38, 0, null, 'vmix-prod'],
+  2: ['NAS Prod', 'access', 10, [], 'NAS Prod · 10.10.0.200', 1, '1G', 96, 640, 0, null, 'nas-prod'],
+  3: ['Poste montage 1', 'access', 10, [], '', 1, '1G', 12, 4, 0, null, ''],
+  5: ['Mélangeur', 'access', 10, [], 'Mélangeur · 10.10.0.30', 1, '1G', 2.1, 0.6, 0, null, 'atem'],
+  6: ['Videohub', 'access', 10, [], 'Videohub · 10.10.0.31', 1, '100M', 0.2, 0.1, 0, null, ''],
+  9: ['PTZ 1 — Plateau A', 'access', 20, [], 'Caméra PTZ 1 · 10.10.0.21', 1, '1G', 9, 31, 0, null, 'ptz1'],
+  10: ['PTZ 2 — Plateau A', 'access', 20, [], 'Caméra PTZ 2 · 10.10.0.22', 1, '1G', 8, 29, 0, null, 'ptz2'],
+  11: ['PTZ 3 — Plateau B', 'access', 20, [], 'Caméra PTZ 3 · 10.10.0.23', 1, '1G', 9, 30, 0, ['VLAN', 'Switch : VLAN 10 · Inventaire : VLAN 20'], 'ptz3'],
+  12: ['PTZ 4 — Plateau B', 'access', 20, [], 'Caméra PTZ 4 · 10.10.0.24', 1, '100M', 6, 22, 1824, null, 'ptz4'],
+  13: ['', 'access', 20, [], '', 0, '', 0, 0, 0, null, ''],
+  15: ['Intercom', 'access', 30, [], 'Intercom · 10.10.0.40', 1, '1G', 3, 3, 0, null, 'riedel'],
+  16: ['', 'access', 30, [], '', 1, '1G', 0.4, 0.2, 0, ['Mode', 'Switch : trunk 30, 40 · Inventaire : accès VLAN 30'], ''],
+  25: ['Poste régie', 'access', 10, [], '', 1, '1G', 25, 5, 0, null, ''],
+  47: ['iDRAC NAS', 'access', 99, [], '', 1, '1G', 0.1, 0.1, 0, null, 'idrac'],
+  48: ['', 'access', 99, [], '', 0, '', 0, 0, 0, ['Désactivé', 'Switch : port désactivé · Inventaire : accès VLAN 99'], ''],
+  49: ['Uplink cœur', 'trunk', null, [10, 20, 30, 99], 'SW-Core-01 · Te1/0/1', 1, '10G', 2210, 1480, 0, null, 'uplink-core'],
+  50: ['Uplink cœur (secours)', 'trunk', null, [10, 20, 30, 99], 'SW-Core-01 · Te1/0/2', 1, '10G', 0.3, 0.3, 0, null, 'uplink-core-b'],
+  51: ['', 'trunk', null, [10, 20], '', 0, '', 0, 0, 0, null, ''],
+};
+const fmt = (m) => (m >= 1000 ? (m / 1000).toFixed(2).replace('.', ',') + ' Gb/s' : m >= 1 ? Math.round(m) + ' Mb/s' : Math.round(m * 1000) + ' kb/s');
+const cap = { '10G': 10000, '1G': 1000, '100M': 100 };
+const spark = (seed) => { let pts = '', y = 8; for (let x = 0; x <= 48; x += 6) { y = Math.max(2, Math.min(14, y + ((seed * x) % 7) - 3)); pts += `${x},${y} `; } return `<svg width="48" height="16"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="${pts}"/></svg>`; };
+
+// Façade
+const face = document.getElementById('face');
+let html = '';
+const port = (n, sfp) => {
+  const p = P[n];
+  const v = p && p[1] === 'access' ? p[2] : null;
+  const up = p ? p[5] : 0;
+  const load = p && up ? Math.min(100, ((p[7] + p[8]) / (cap[p[6]] || 1000)) * 100) : 0;
+  const cls = `sw-port${sfp ? ' sfp' : ''}${p && p[1] === 'trunk' ? ' trunk' : ''}${up ? '' : ' down'}${p && p[10] ? ' sel' : ''}`;
+  const tip = `Port ${n}${p ? ` · ${up ? 'lien ' + p[6] + ' · ↓ ' + fmt(p[7]) + ' ↑ ' + fmt(p[8]) : 'sans lien'}` : ' · sans lien'}`;
+  return `<button class="${cls}" ${v ? `style="--vlan:${V[v][0]}"` : ''} title="${tip}">${n}<span class="link"></span>${up ? `<span class="load"><i class="${load > 60 ? 'hot' : ''}" style="width:${Math.max(6, load)}%"></i></span>` : ''}</button>`;
+};
+for (let b = 0; b < 4; b++) html += `<div class="sw-block">${Array.from({ length: 12 }, (_, i) => port(b * 12 + i + 1)).join('')}</div>`;
+html += `<div class="sw-sfp">${[49, 50, 51, 52].map((n) => port(n, true)).join('')}</div>`;
+face.innerHTML = html;
+document.getElementById('legend').innerHTML = `<span><span class="vlan-sw" style="--vlan:#22c55e"></span>10 Régie · 6</span><span><span class="vlan-sw" style="--vlan:#8fa3ff"></span>20 Caméras · 5</span><span><span class="vlan-sw" style="--vlan:#f5c542"></span>30 Audio · 2</span><span><span class="vlan-sw" style="--vlan:#ff3b5c"></span>99 Management · 2</span><span style="margin-left:10px"><span class="lk up"></span>Lien actif · 19</span><span><span class="lk"></span>Sans lien · 33</span><span>▬ Charge du port</span>`;
+
+// Tableau
+let rows = '';
+for (const n of Object.keys(P).map(Number)) {
+  const [label, mode, v, tagged, host, up, speed, inM, outM, errs, diff, descr] = P[n];
+  const name = n <= 48 ? `Gi1/0/${n}` : `Te1/1/${n - 48}`;
+  const vlanCell = mode === 'trunk' ? `<div style="display:flex;gap:4px">${tagged.map(vtag).join('')}</div>` : `<div class="ed"><span class="vlan-sw" style="--vlan:${V[v][0]}"></span><span>${v} · ${V[v][1]}</span></div>`;
+  rows += `<tr class="${diff ? 'has-diff' : ''}" style="--vlan:${v ? V[v][0] : 'transparent'}">
+    <td><input type="checkbox" class="tick"></td>
+    <td><b class="ip">${n}</b> <span class="ip muted2">${name}</span></td>
+    <td><div class="ed"><span class="${label ? '' : 'ph'}">${label || 'Libellé'}</span>${descr ? `<span class="descr" title="Description dans le switch">« ${descr} »</span>` : ''}</div></td>
+    <td><div class="segmented"><button class="${mode === 'access' ? 'on' : ''}">Accès</button><button class="${mode === 'trunk' ? 'on' : ''}">Trunk</button><button>Off</button></div></td>
+    <td style="display:flex;align-items:center;gap:6px;height:34px">${vlanCell}${diff ? `<span class="diff" title="${diff[1]}">≠ ${diff[0]}</span><button class="take" title="${diff[1]}">Reprendre</button>` : ''}</td>
+    <td>${up ? `<span class="lk up">${speed}</span>` : n === 48 ? '<span class="lk down admin-off">désactivé</span>' : '<span class="lk down">sans lien</span>'}</td>
+    <td>${up ? `<div class="rate">${spark(n)}<div class="io"><span>↓ ${fmt(inM)}</span><span>↑ ${fmt(outM)}</span></div></div>` : ''}</td>
+    <td class="num"><span class="err ${errs ? 'bad' : ''}" title="${errs ? 'Erreurs CRC en entrée depuis le démarrage du switch' : ''}">${errs ? errs.toLocaleString('fr-FR') : '0'}</span></td>
+    <td>${host ? `<div class="ed"><span>${host}</span></div>` : '<div class="ed"><span class="ph">Raccorder…</span></div>'}</td>
+  </tr>`;
+}
+document.getElementById('ports').innerHTML = rows;
+
+document.querySelectorAll('[data-theme-set]').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.themeSet === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
+  document.querySelectorAll('[data-theme-set]').forEach((x) => x.classList.toggle('on', x === b));
+}));
+</script>
+</body>
+</html>
