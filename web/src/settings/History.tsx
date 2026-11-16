@@ -40,6 +40,8 @@ function actionText(a: string): string {
     'took config from switch': () => t('took config from switch'),
     'saved switch model': () => t('saved switch model'),
     'deleted switch model': () => t('deleted switch model'),
+    'changed alert rules': () => t('changed alert rules'),
+    'linked switches': () => t('linked switches'),
   };
   return known[a.toLowerCase()]?.() ?? a;
 }

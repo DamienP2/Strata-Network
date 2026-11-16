@@ -37,6 +37,24 @@ export function fmtTime(v: number | string | null | undefined): string {
   return ms === null ? '—' : new Date(ms).toLocaleTimeString(locale(), safe({ hour: '2-digit', minute: '2-digit', second: '2-digit' }));
 }
 
+/** « 14:05 ». */
+export function fmtHm(v: number | string | null | undefined): string {
+  const ms = toMs(v);
+  return ms === null ? '—' : new Date(ms).toLocaleTimeString(locale(), safe({ hour: '2-digit', minute: '2-digit' }));
+}
+
+/** « lun. 14 ». */
+export function fmtWeekday(v: number | string | null | undefined): string {
+  const ms = toMs(v);
+  return ms === null ? '—' : new Date(ms).toLocaleDateString(locale(), safe({ weekday: 'short', day: 'numeric' }));
+}
+
+/** Même jour calendaire (dans le fuseau du serveur). */
+export function sameDay(a: number, b: number): boolean {
+  const f = (ms: number) => new Date(ms).toLocaleDateString('en-CA', safe({ year: 'numeric', month: '2-digit', day: '2-digit' }));
+  return f(a) === f(b);
+}
+
 /** « il y a 5 min ». */
 export function fmtAgo(v: number | string | null | undefined): string {
   const ms = toMs(v);

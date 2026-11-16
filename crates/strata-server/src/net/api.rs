@@ -38,6 +38,10 @@ pub fn router() -> Router<Shared> {
         .route("/api/switches/{id}/online", patch(set_online))
         .route("/api/switches/{id}/live", get(switch_live))
         .route("/api/switches/{id}/take", post(take_from_switch))
+        .route("/api/switches/{id}/info", get(switch_info))
+        .route("/api/switches/{id}/ports/{port}/history", get(port_history))
+        .route("/api/switches/{id}/rules", put(set_rules))
+        .route("/api/switches/{id}/link-neighbours", post(link_neighbours))
         .route("/api/switch-models", get(switch_models).post(create_switch_model))
         .route("/api/switch-models/{id}", axum::routing::delete(delete_switch_model))
         .route("/api/snmp", get(snmp_list).post(create_snmp))
@@ -466,6 +470,8 @@ async fn update_switch(State(s): State<Shared>, me: Session, Path(id): Path<Stri
         // Online is changed by its own route; without an agent the switch cannot stay online.
         sw.online = cur.online && sw.snmp.is_some();
         sw.online_secs = cur.online_secs;
+        // Rules too (their own route).
+        sw.rules = cur.rules.clone();
     }
     let was_online = net(&s).live.lock().unwrap().contains_key(&id);
     check_switch(&mut sw)?;
@@ -508,6 +514,7 @@ async fn delete_switch(State(s): State<Shared>, me: Session, Path(id): Path<Stri
         name
     };
     net(&s).stop_live(&id);
+    net(&s).forget_rates(&id);
     net(&s).save(&[File::Switches, File::Addresses]);
     net(&s).changed("switches");
     net(&s).log(&who(&me.user), "deleted switch", &name, "");
@@ -549,6 +556,7 @@ async fn patch_ports(State(s): State<Shared>, me: Session, Path(id): Path<String
                     }
                     "host" => p.host = v.as_str().and_then(|x| x.parse().ok()),
                     "peer" => p.peer = serde_json::from_value(v.clone()).ok(),
+                    "watched" => p.watched = v.as_bool().unwrap_or(false),
                     _ => return Err(bad(format!("unknown field {k}"))),
                 }
             }
@@ -644,6 +652,58 @@ async fn take_from_switch(State(s): State<Shared>, me: Session, Path(id): Path<S
     net(&s).log(&who(&me.user), "took config from switch", &sw.name, &names.join(", "));
     net(&s).live_changed(&id);
     Ok(Json(sw))
+}
+
+async fn switch_info(State(s): State<Shared>, _me: Session, Path(id): Path<String>) -> ApiResult<Json<super::info::InfoView>> {
+    net(&s).info_of(&id).map(Json).ok_or_else(|| status(404, "the switch is not online"))
+}
+
+#[derive(Deserialize)]
+struct RangeQ {
+    range: Option<String>,
+}
+
+async fn port_history(State(s): State<Shared>, _me: Session, Path((id, port)): Path<(String, u16)>, Query(q): Query<RangeQ>) -> ApiResult<Json<super::rates::History>> {
+    let range = super::rates::Range::parse(q.range.as_deref().unwrap_or("1h")).ok_or_else(|| bad("the range is 1h, 24h or 7d"))?;
+    let secs = {
+        let st = net(&s).store.lock().unwrap();
+        let sw = st.switches.iter().find(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
+        if !sw.ports.iter().any(|p| p.n == port) {
+            return Err(not_found("port"));
+        }
+        sw.online_secs
+    };
+    let now = crate::paths::now_ms();
+    Ok(Json(net(&s).with_rates(&id, |r| super::rates::history(r.ports.get(&port), range, now, secs))))
+}
+
+async fn set_rules(State(s): State<Shared>, me: Session, Path(id): Path<String>, Json(mut rules): Json<AlertRules>) -> ApiResult<Json<Switch>> {
+    editor(&me)?;
+    rules.clamp();
+    let sw = {
+        let mut st = net(&s).store.lock().unwrap();
+        let sw = st.switches.iter_mut().find(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
+        sw.rules = rules;
+        sw.clone()
+    };
+    net(&s).save(&[File::Switches]);
+    net(&s).changed("switches");
+    net(&s).log(&who(&me.user), "changed alert rules", &sw.name, "");
+    Ok(Json(sw))
+}
+
+async fn link_neighbours(State(s): State<Shared>, me: Session, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    editor(&me)?;
+    let made = net(&s).link_neighbours(&id).ok_or_else(|| status(404, "the switch is not online"))?;
+    if !made.is_empty() {
+        let name = net(&s).store.lock().unwrap().switches.iter().find(|x| x.id == id).map(|x| x.name.clone()).unwrap_or_default();
+        net(&s).save(&[File::Switches]);
+        net(&s).changed("switches");
+        let detail = made.iter().map(|(a, b, c)| format!("{a} ↔ {b} {c}")).collect::<Vec<_>>().join(", ");
+        net(&s).log(&who(&me.user), "linked switches", &name, &detail);
+        net(&s).send_info(&id);
+    }
+    Ok(Json(json!({ "linked": made.len() })))
 }
 
 // ── Switch models and detection ──

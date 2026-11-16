@@ -58,6 +58,7 @@ interface SwitchPort {
   peer?: { id: string; port: number };   // another switch plugged in (uplink/downlink)
   learnt: string[];            // MACs seen on the port (SNMP, read-only)
   lldp?: { name: string; port: string }; // neighbour announced by LLDP (SNMP, read-only)
+  watched: boolean;            // alert when its link goes down (online switch, rule linkDown); default false
 }
 
 interface PortGroup {          // ports of one kind side by side on the faceplate
@@ -77,6 +78,20 @@ interface Switch {
   ports: SwitchPort[];         // always one entry per faceplate port
   online: boolean;             // read live through `snmp` (default false)
   onlineSecs: 5 | 10 | 30 | 60;   // seconds between two live reads (default 10)
+  rules: AlertRules;           // alerts raised while online (defaults below); changed by its own route only
+}
+
+interface Rule { on: boolean; value: number }   // value unused by linkDown, drift, neighbours
+interface AlertRules {         // defaults
+  linkDown: Rule;              // on            watched port's link down (admin up, oper down)
+  flap: Rule;                  // on, 3         more than `value` link drops in 10 min (1..1000)
+  errors: Rule;                // on, 100       more than `value` in+out errors per minute (≥ 1)
+  opticRx: Rule;               // on, -10       optic Rx power below `value` dBm (-40..10); the optic's own thresholds are not used
+  saturation: Rule;            // on, 90        max(in, out) above `value` % of the link speed for 1 min (1..100)
+  health: Rule;                // on, 60        power supply or fan not ok, or a temperature above `value` °C (20..150)
+  drift: Rule;                 // on            a new switch / inventory difference (those there when the VLAN setup is first read are not new)
+  neighbours: Rule;            // off           a CDP / LLDP neighbour appeared or disappeared (compared with the previous read)
+  poe: Rule;                   // on, 85        PoE power used above `value` % of the budget (PoE switches only)
 }
 
 // Switches saved before port groups ({copper, sfp, naming, sfpNaming}) are migrated when loaded to
@@ -118,6 +133,39 @@ interface LivePort {
   inHistory: number[]; outHistory: number[];   // rates, oldest first, ≤ 60
 }
 
+interface InfoPort { n?: number /* faceplate port, when the interface is one */; port: string /* interface name */ }
+
+interface SwitchInfo {         // an online switch's slow reads (strata_net::switchinfo), every 60 s, in memory only
+  at: number;                  // last successful read (unix ms); 0 before the first one
+  error?: string;              // why the last read failed entirely (the last values stay)
+  errors: string[];            // the parts the switch did not answer ("optics: timed out", "poe: skipped"…)
+  neighbours: (InfoPort & { name: string; remotePort: string; ip?: string; platform: string; chassisId: string; protocol: 'lldp' | 'cdp' })[];
+  optics: (InfoPort & { kind: string; vendor: string; part: string; serial: string; rxDbm?: number; txDbm?: number /* weakest lane */;
+            rxLanesDbm: number[]; tempC?: number; biasMa?: number; voltage?: number; rxLowWarnDbm?: number; rxLowAlarmDbm?: number })[];
+  mcast: { vlan: number; group?: string /* read, else the one stream seen (multicast page) whose 01:00:5E MAC matches */;
+           mac: string; name?: string /* stream label, else its SAP name */; ports: InfoPort[] }[];   // IGMP snooping
+  routerPorts: { vlan: number; ports: InfoPort[] }[];   // multicast router ports
+  health: { cpuPct?: number; cpu5minPct?: number; memUsedBytes?: number; memTotalBytes?: number;
+            temps: { name: string; c: number }[];
+            fans: { name: string; ok: boolean; detail: string }[];
+            psus: { name: string; ok: boolean; detail: string; watts?: number }[];
+            cpu: [number, number][] };   // [unix ms, CPU %] at each read, the last 24 h
+            // detail: the switch's words ("up", "off (no input power)", "disabled"…)
+  lags: { n: number; port: string; agg: string /* "port-channel1" */ }[];   // faceplate members of an aggregate
+  stp: { n: number; state: 'disabled' | 'blocking' | 'listening' | 'learning' | 'forwarding' | 'broken' }[];   // members take the aggregate's state
+  poe?: { budgetW?: number; usedW?: number;
+          ports: (InfoPort & { adminOn: boolean; on: boolean; status: 'disabled' | 'searching' | 'delivering' | 'fault' | 'test' | 'otherFault' | 'unknown';
+                               class?: number; watts?: number })[] };   // absent: no PoE; port "g/p" when not matched to an interface
+  links: { n: number; switchId: string; port: number }[];   // neighbours that are another inventory switch, not linked yet (see link-neighbours)
+}
+
+interface PortHistory {        // GET …/ports/{n}/history
+  from: number; to: number;    // the range (unix ms)
+  stepSecs: number;            // 1h: the read interval; 24h: 300; 7d: 1800
+  points: { at: number; in: number; out: number; inPeak?: number; outPeak?: number }[];   // b/s; 24h / 7d: bucket average + peak
+  in: { avg: number; peak: number }; out: { avg: number; peak: number };
+}
+
 interface SnmpAgent {          // read-only, SNMP v2c or v3
   id: string; name: string; ip: string; port: number /* 161 */; community: string /* sent masked "••••••••" */;
   v3?: { user: string; auth: 'none' | 'md5' | 'sha' | 'sha256'; authPassword: string; privacy: 'none' | 'des' | 'aes128'; privPassword: string } | null;   // SNMP v3 instead of the community; passwords sent masked
@@ -143,11 +191,21 @@ interface Service { kind: string /* NDI, Dante, AES67 / RAVENNA, NMOS, Web… */
 
 interface Alert {
   id: string; at: number;
-  kind: 'newHost' | 'hostGone' | 'ipConflict' | 'vlanMismatch' | 'watchDown' | 'watchUp';
-  ip: string; networkId?: string;
+  kind: 'newHost' | 'hostGone' | 'ipConflict' | 'vlanMismatch' | 'watchDown' | 'watchUp'
+      // switch alerts (online switches, rules of the switch):
+      | 'portDown' | 'portFlap' | 'portErrors' | 'portSaturated' | 'configDrift' | 'opticLow'
+      | 'psuFault' | 'fanFault' | 'tempHigh' | 'poeBudget' | 'neighbourNew' | 'neighbourGone';
+  ip: string; networkId?: string;   // switch alerts: the switch's IP, else its agent's IP, else 0.0.0.0
   detail: string;              // facts only, English, e.g. "00:11:32:AB:CD:EF and 3C:52:82:5A:00:E1"
   seen: boolean;
+  switchId?: string;           // switch alerts: the switch,
+  port?: number;               // the faceplate port (none for power supply, fan, temperature, PoE budget),
+  value?: number; limit?: number;   // and the measure with the rule's limit
 }
+// Switch alert details: portDown: the port label; configDrift: "<switch fact> / <inventory fact>";
+// opticLow: the interface name when not a faceplate port; psuFault / fanFault: "<name> · <switch's state>";
+// tempHigh: the sensor name; poeBudget: "<used> / <budget> W"; neighbourNew / Gone: "<remote name> <remote port>"
+// (prefixed by "<interface> · " when not a faceplate port). Others: empty.
 
 interface HistoryEntry { at: number; user: string /* display name, or "scheduler" */; action: string; target: string; detail: string }
 ```
@@ -174,10 +232,14 @@ interface HistoryEntry { at: number; user: string /* display name, or "scheduler
 | `GET /api/switch-models` | → `{builtin: SwitchModel[], mine: SwitchModel[]}` | built-in catalog compiled into the server + user models; `changed: switchModels` |
 | `POST /api/switch-models` | `{brand, model, groups}` → `SwitchModel` | 400 "the name cannot be empty" (model), same port limits as a switch |
 | `DELETE /api/switch-models/{id}` | → 204 | user models only; 404 "no such switch model" |
-| `PATCH /api/switches/{id}/ports` | `{ports: number[], set: Partial<SwitchPort>}` → `Switch` | several ports at once |
+| `PATCH /api/switches/{id}/ports` | `{ports: number[], set: Partial<SwitchPort>}` → `Switch` | several ports at once (`label, mode, vlan, tagged, host, peer, watched`) |
 | `PATCH /api/switches/{id}/online` | `{online?, onlineSecs?}` → 204 | 400 "the switch has no snmp agent", 400 "the read interval is 5, 10, 30 or 60 seconds"; `changed: switches` |
 | `GET /api/switches/{id}/live` | → `Live` | 404 "the switch is not online" |
 | `POST /api/switches/{id}/take` | `{ports: number[] \| null}` (null = every port with a diff) → `Switch` | copies the switch's setup into the inventory; 404 "the switch is not online", 409 "the vlan setup of the switch is not known yet"; `changed: switches` |
+| `GET /api/switches/{id}/info` | → `SwitchInfo` | 404 "the switch is not online"; ports mapped to the faceplate as for `Live` |
+| `GET /api/switches/{id}/ports/{n}/history?range=1h\|24h\|7d` | → `PortHistory` | default 1h; 400 "the range is 1h, 24h or 7d", 404 "no such switch" / "no such port"; also for a switch offline now |
+| `PUT /api/switches/{id}/rules` | `AlertRules` → `Switch` | limits clamped; `changed: switches`; history "changed alert rules" |
+| `POST /api/switches/{id}/link-neighbours` | → `{linked: number}` | records every `SwitchInfo.links` entry as `peer` on both ports (their `host` cleared); 404 "the switch is not online"; `changed: switches`; history "linked switches" |
 | `GET /api/snmp` · `POST` · `PUT /{id}` · `DELETE /{id}` | `SnmpAgent` | admin only for writes; `changed: snmp` |
 | `POST /api/snmp/{id}/poll` | → `SnmpAgent` | reads now (also every 5 min) |
 | `POST /api/snmp/test` | `{ip, port, community, v3?, id?}` → `{name, description}` | 502 + message on failure; masked secrets are taken from agent `id` |
@@ -195,6 +257,7 @@ WebSocket, besides `changed`:
 - `{"type":"scan","networkId","running":bool,"done","total","up"}` while a scan runs (at most 4 per second) and once at the end.
 - `{"type":"address","networkId","address":Address}` each time a scan examines a machine.
 - `{"type":"switchLive","id","live":Live}` after each live read of an online switch, and when its inventory changes.
+- `{"type":"switchInfo","id","info":SwitchInfo}` after each slow read of an online switch, and after `link-neighbours`.
 - The `hello` message carries `scans: {networkId: {done,total,up}}` for the scans running.
 
 ## Behaviour
@@ -218,6 +281,22 @@ WebSocket, besides `changed`:
   inventory when the mode, the access VLAN or the tagged VLANs differ (a trunk's native VLAN only when the
   inventory sets one; VLAN 1, where switches leave unconfigured ports, matches an inventory port without VLAN). `take` copies mode, VLAN and tagged VLANs (a disabled port keeps its VLANs; VLAN 1 becomes no VLAN unless
   the inventory has a VLAN 1), and the port description as label when the inventory has none. Removing the switch's agent puts it offline.
+- **Slow reads of an online switch** (`strata_net::switchinfo::all`, read-only GET/GETNEXT/GETBULK, same SNMP session
+  kind as the live reads): when it goes online, then every 60 s. Interfaces are mapped to the faceplate through the
+  live reads (ifIndex → port), the other interfaces keep their name (`port-channel1`).
+- **Neighbour switches**: a CDP / LLDP neighbour on a faceplate port is another inventory switch when its name equals
+  that switch's name or its name in the switch (sysName, when it is online), host part only and case ignored, or its
+  IP is the switch's IP or its agent's IP; its port is the one whose name is the same interface (`Ethernet1/1` =
+  `Eth1/1`). Proposed in `links` unless the two ports are already linked to each other, or the other end is linked
+  to a third port.
+- **Rate history**: each live rate is kept per faceplate port: 1 hour as read, 24 hours in 5-minute buckets, 7 days
+  in 30-minute buckets (sum, count and peak); written every 5 minutes to `<data>/network/rates/<switchId>.json`
+  (read back when first needed, removed with the switch).
+- **Switch alerts**: the rules are checked at each live read (link down, flapping, errors, saturation, differences)
+  and each slow read (optics, power supplies, fans, temperatures, PoE budget, neighbours). A condition raises its
+  alert once, then not again until it has cleared (in memory: a restart may raise it again, but never while the same
+  alert waits unseen); the drops of a flapping port are not reported one by one. A part of the slow read that failed
+  keeps its conditions as they were.
 - **Detection** (`POST /api/switches/detect`): reads the system group and ENTITY chassis (name, description, model,
   serial, firmware, location) and the interface table (ifName or ifDescr, ifType, ifHighSpeed). Physical ports are the
   interfaces of type 6, 62, 69 or 117 (or, when the type is not given, named like Ethernet / Eth / Gi / Te / Twe / Fo /
@@ -226,7 +305,8 @@ WebSocket, besides `changed`:
   are proposed (`matched` = its id); else consecutive ports with the same naming pattern (prefix + trailing number) and
   speed class (≥ 40 G qsfp, ≥ 10 G sfp, else rj45; a port without speed follows the one before) make a group.
 - **History**: every write route above adds an entry (`action`: "created network", "scanned", "changed port", "switch online", "switch offline",
-  "changed read interval", "took config from switch", "saved switch model", "deleted switch model", …).
+  "changed read interval", "took config from switch", "saved switch model", "deleted switch model",
+  "changed alert rules", "linked switches", …).
 - Storage: `<data>/network/{networks,addresses,vlans,switches,snmp,multicast,alerts,history,templates}.json`
-  (`templates.json`: the user switch models), atomic writes;
+  (`templates.json`: the user switch models) and `<data>/network/rates/<switchId>.json` (rate history), atomic writes;
   history kept 1 year, alerts 500 newest.

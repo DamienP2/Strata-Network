@@ -67,6 +67,8 @@ const KNOWN: [RegExp, () => string][] = [
   [/the switch is not online/i, () => t('The switch is not online')],
   [/the vlan setup of the switch is not known/i, () => t('The VLAN setup of the switch is not known yet')],
   [/the read interval is/i, () => t('The read interval is 5, 10, 30 or 60 seconds')],
+  [/the range is 1h, 24h or 7d/i, () => t('The range is 1 h, 24 h or 7 days')],
+  [/^no such port/i, () => t('No such port')],
 ];
 
 /** Le message d'erreur à montrer ; le texte brut reste en infobulle. */

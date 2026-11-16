@@ -15,10 +15,12 @@ use crate::paths::{new_id, now_ms, read_json};
 use crate::state::{AppState, Audience};
 
 pub mod api;
+pub mod info;
 pub mod live;
 pub mod model;
 pub mod models;
 mod multicast;
+pub mod rates;
 mod scanner;
 mod snmp;
 
@@ -103,6 +105,8 @@ pub struct Net {
     pub watch: Mutex<HashMap<u32, u32>>,
     /// Online switches: what was read, and the task reading them.
     pub live: Mutex<HashMap<String, live::Runner>>,
+    /// Bandwidth history of the switches' ports, read from `rates/` when first needed.
+    pub rates: Mutex<HashMap<String, rates::SwitchRates>>,
 }
 
 fn load<T: serde::de::DeserializeOwned + Default>(dir: &std::path::Path, f: File) -> T {
@@ -168,6 +172,7 @@ impl Net {
             snmp_cache: Mutex::default(),
             watch: Mutex::default(),
             live: Mutex::default(),
+            rates: Mutex::default(),
         });
         if migrated {
             net.save(&[File::Switches]);
@@ -175,6 +180,7 @@ impl Net {
         scanner::spawn_scheduler(net.clone());
         scanner::spawn_monitor(net.clone());
         snmp::spawn_poller(net.clone());
+        rates::spawn_saver(net.clone());
         multicast::start(&net);
         multicast::spawn_services(net.clone());
         let online: Vec<String> = net.store.lock().unwrap().switches.iter().filter(|s| s.online).map(|s| s.id.clone()).collect();
@@ -246,7 +252,18 @@ impl Net {
             return false;
         }
         let network_id = st.network_of(ip).map(|n| n.id.clone());
-        st.alerts.insert(0, Alert { id: new_id(), at: now_ms(), kind: kind.into(), ip, network_id, detail, seen: false });
+        st.alerts.insert(0, Alert { id: new_id(), at: now_ms(), kind: kind.into(), ip, network_id, detail, seen: false, switch_id: None, port: None, value: None, limit: None });
+        st.alerts.truncate(MAX_ALERTS);
+        true
+    }
+
+    /// Raises a switch alert, unless the same one is already waiting unseen.
+    pub fn switch_alert(&self, st: &mut Store, sw: &Switch, ip: Ipv4Addr, r: info::Raise) -> bool {
+        if st.alerts.iter().any(|a| !a.seen && a.kind == r.kind && a.switch_id.as_deref() == Some(sw.id.as_str()) && a.port == r.port && a.detail == r.detail) {
+            return false;
+        }
+        let network_id = st.network_of(ip).map(|n| n.id.clone());
+        st.alerts.insert(0, Alert { id: new_id(), at: now_ms(), kind: r.kind.into(), ip, network_id, detail: r.detail, seen: false, switch_id: Some(sw.id.clone()), port: r.port, value: r.value, limit: r.limit });
         st.alerts.truncate(MAX_ALERTS);
         true
     }

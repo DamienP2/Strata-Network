@@ -80,6 +80,8 @@ export interface SwitchPort {
   peer?: { id: string; port: number };
   learnt: string[];
   lldp?: { name: string; port: string };
+  /** Alerte quand son lien tombe (switch en ligne). */
+  watched: boolean;
 }
 
 export type PortKind = 'rj45' | 'sfp' | 'qsfp';
@@ -121,6 +123,118 @@ export interface Switch {
   ports: SwitchPort[];
   online: boolean;
   onlineSecs: number;
+  rules: AlertRules;
+}
+
+/** Une règle d'alerte : active ou non, et sa limite. */
+export interface Rule {
+  on: boolean;
+  value: number;
+}
+
+export interface AlertRules {
+  linkDown: Rule;
+  flap: Rule;
+  errors: Rule;
+  opticRx: Rule;
+  saturation: Rule;
+  health: Rule;
+  drift: Rule;
+  neighbours: Rule;
+  poe: Rule;
+}
+
+/** Une interface du switch : son port de façade quand elle en est un. */
+export interface InfoPort {
+  n?: number;
+  port: string;
+}
+
+export interface Neighbour extends InfoPort {
+  name: string;
+  remotePort: string;
+  ip?: string;
+  platform: string;
+  chassisId: string;
+  protocol: 'lldp' | 'cdp';
+}
+
+export interface Optic extends InfoPort {
+  kind: string;
+  vendor: string;
+  part: string;
+  serial: string;
+  rxDbm?: number;
+  txDbm?: number;
+  rxLanesDbm: number[];
+  tempC?: number;
+  biasMa?: number;
+  voltage?: number;
+  rxLowWarnDbm?: number;
+  rxLowAlarmDbm?: number;
+}
+
+export interface SnoopGroup {
+  vlan: number;
+  group?: string;
+  mac: string;
+  name?: string;
+  ports: InfoPort[];
+}
+
+export interface HealthUnit {
+  name: string;
+  ok: boolean;
+  detail: string;
+  watts?: number;
+}
+
+export type StpState = 'disabled' | 'blocking' | 'listening' | 'learning' | 'forwarding' | 'broken';
+export type PoeStatus = 'disabled' | 'searching' | 'delivering' | 'fault' | 'test' | 'otherFault' | 'unknown';
+
+export interface PoePort extends InfoPort {
+  adminOn: boolean;
+  on: boolean;
+  status: PoeStatus;
+  class?: number;
+  watts?: number;
+}
+
+/** Les lectures lentes d'un switch en ligne (toutes les minutes). */
+export interface SwitchInfo {
+  at: number;
+  error?: string;
+  errors: string[];
+  neighbours: Neighbour[];
+  optics: Optic[];
+  mcast: SnoopGroup[];
+  routerPorts: { vlan: number; ports: InfoPort[] }[];
+  health: {
+    cpuPct?: number;
+    cpu5minPct?: number;
+    memUsedBytes?: number;
+    memTotalBytes?: number;
+    temps: { name: string; c: number }[];
+    fans: HealthUnit[];
+    psus: HealthUnit[];
+    /** [ms, %], 24 h. */
+    cpu: [number, number][];
+  };
+  lags: { n: number; port: string; agg: string }[];
+  stp: { n: number; state: StpState }[];
+  poe?: { budgetW?: number; usedW?: number; ports: PoePort[] };
+  /** Voisins qui sont un autre switch de l'inventaire, pas encore reliés. */
+  links: { n: number; switchId: string; port: number }[];
+}
+
+/** L'historique des débits d'un port. */
+export interface PortHistory {
+  from: number;
+  to: number;
+  stepSecs: number;
+  points: { at: number; in: number; out: number; inPeak?: number; outPeak?: number }[];
+  in: { avg: number; peak: number };
+  out: { avg: number; peak: number };
 }
 
 export interface LivePort {
@@ -216,7 +330,25 @@ export interface Service {
   txt: string[];
 }
 
-export type AlertKind = 'newHost' | 'hostGone' | 'ipConflict' | 'vlanMismatch' | 'watchDown' | 'watchUp';
+export type AlertKind =
+  | 'newHost'
+  | 'hostGone'
+  | 'ipConflict'
+  | 'vlanMismatch'
+  | 'watchDown'
+  | 'watchUp'
+  | 'portDown'
+  | 'portFlap'
+  | 'portErrors'
+  | 'portSaturated'
+  | 'configDrift'
+  | 'opticLow'
+  | 'psuFault'
+  | 'fanFault'
+  | 'tempHigh'
+  | 'poeBudget'
+  | 'neighbourNew'
+  | 'neighbourGone';
 
 export interface Alert {
   id: string;
@@ -226,6 +358,11 @@ export interface Alert {
   networkId?: string;
   detail: string;
   seen: boolean;
+  /** Alertes d'un switch : le switch, le port, la mesure et sa limite. */
+  switchId?: string;
+  port?: number;
+  value?: number;
+  limit?: number;
 }
 
 export interface HistoryEntry {

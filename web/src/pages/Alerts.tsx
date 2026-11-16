@@ -4,12 +4,13 @@ import { t, tn } from '../i18n';
 import { api } from '../store';
 import { navigate } from '../router';
 import { fmtDateTime } from '../ui/format';
-import { ALERT_KINDS, ALERT_TONE, alertLabel, displayName, factText, fail, useAllAddresses, useList } from '../net/model';
-import type { Alert, AlertKind, Network } from '../net/types';
+import { ALERT_KINDS, ALERT_TONE, alertDetail, alertLabel, displayName, fail, portName, useAllAddresses, useList } from '../net/model';
+import type { Alert, AlertKind, Network, Switch } from '../net/types';
 
 export function Alerts() {
   const [alerts, load] = useList<Alert[]>('alerts', '/api/alerts');
   const [networks] = useList<Network[]>('networks', '/api/networks');
+  const [switches] = useList<Switch[]>('switches', '/api/switches');
   const addrs = useAllAddresses(networks);
   const [kind, setKind] = useState<AlertKind | 'all'>('all');
 
@@ -28,7 +29,8 @@ export function Alerts() {
 
   const open = (a: Alert) => {
     if (!a.seen) void seen([a.id]);
-    if (a.networkId) navigate(`/scan/${a.networkId}?ip=${encodeURIComponent(a.ip)}`);
+    if (a.switchId) navigate(`/switches/${a.switchId}`);
+    else if (a.networkId) navigate(`/scan/${a.networkId}?ip=${encodeURIComponent(a.ip)}`);
   };
 
   if (!alerts) return <div className="loading">{t('Loading…')}</div>;
@@ -81,7 +83,8 @@ export function Alerts() {
               <tbody>
                 {shown.map((a) => {
                   const host = addrs.get(a.ip);
-                  const name = displayName(host, a.ip);
+                  const sw = a.switchId ? switches?.find((x) => x.id === a.switchId) : undefined;
+                  const name = sw ? [sw.name, a.port !== undefined ? portName(sw, a.port) : ''].filter(Boolean).join(' · ') : displayName(host, a.ip);
                   return (
                     <tr key={a.id} className={a.seen ? '' : 'unseen'} onClick={() => open(a)}>
                       <td>{!a.seen && <span className="nav-dot warn" title={t('Unseen')} />}</td>
@@ -93,7 +96,7 @@ export function Alerts() {
                         <span className="ip">{a.ip}</span> {name !== a.ip && <span className="muted">{name}</span>}
                       </td>
                       <td className="ip" title={a.detail}>
-                        {factText(a.detail)}
+                        {alertDetail(a)}
                       </td>
                       <td>{networks?.find((n) => n.id === a.networkId)?.name ?? '—'}</td>
                     </tr>

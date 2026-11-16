@@ -180,6 +180,9 @@ pub struct SwitchPort {
     pub learnt: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lldp: Option<Lldp>,
+    /// Alert when its link goes down (online switches).
+    #[serde(default)]
+    pub watched: bool,
 }
 
 fn access() -> String {
@@ -188,7 +191,7 @@ fn access() -> String {
 
 impl SwitchPort {
     pub fn new(n: u16) -> SwitchPort {
-        SwitchPort { n, name: String::new(), label: String::new(), mode: access(), vlan: None, tagged: vec![], host: None, peer: None, learnt: vec![], lldp: None }
+        SwitchPort { n, name: String::new(), label: String::new(), mode: access(), vlan: None, tagged: vec![], host: None, peer: None, learnt: vec![], lldp: None, watched: false }
     }
 }
 
@@ -298,6 +301,74 @@ pub struct Switch {
     /// Seconds between two live reads: 5, 10, 30 or 60.
     #[serde(default = "default_online_secs")]
     pub online_secs: u32,
+    /// Alerts raised while the switch is online.
+    #[serde(default)]
+    pub rules: AlertRules,
+}
+
+/// One alert rule: on or off, and its limit (unused by some rules).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Rule {
+    pub on: bool,
+    #[serde(default)]
+    pub value: f32,
+}
+
+const fn rule(on: bool, value: f32) -> Rule {
+    Rule { on, value }
+}
+
+/// The alert rules of an online switch.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AlertRules {
+    /// Link down on a watched port.
+    pub link_down: Rule,
+    /// More than `value` link drops in 10 minutes.
+    pub flap: Rule,
+    /// More than `value` errors per minute on a port.
+    pub errors: Rule,
+    /// Optical receive power below `value` dBm.
+    pub optic_rx: Rule,
+    /// Port load above `value` % for 1 minute.
+    pub saturation: Rule,
+    /// Power supply or fan fault, or a temperature above `value` °C.
+    pub health: Rule,
+    /// A new difference between the switch and the inventory.
+    pub drift: Rule,
+    /// A CDP / LLDP neighbour appeared or disappeared.
+    pub neighbours: Rule,
+    /// PoE power used above `value` % of the budget.
+    pub poe: Rule,
+}
+
+impl Default for AlertRules {
+    fn default() -> Self {
+        AlertRules {
+            link_down: rule(true, 0.0),
+            flap: rule(true, 3.0),
+            errors: rule(true, 100.0),
+            optic_rx: rule(true, -10.0),
+            saturation: rule(true, 90.0),
+            health: rule(true, 60.0),
+            drift: rule(true, 0.0),
+            neighbours: rule(false, 0.0),
+            poe: rule(true, 85.0),
+        }
+    }
+}
+
+impl AlertRules {
+    /// Limits kept in sensible bounds.
+    pub fn clamp(&mut self) {
+        self.flap.value = self.flap.value.round().clamp(1.0, 1000.0);
+        self.errors.value = self.errors.value.round().clamp(1.0, 1e9);
+        self.optic_rx.value = self.optic_rx.value.clamp(-40.0, 10.0);
+        self.saturation.value = self.saturation.value.clamp(1.0, 100.0);
+        self.health.value = self.health.value.clamp(20.0, 150.0);
+        self.poe.value = self.poe.value.clamp(1.0, 100.0);
+    }
 }
 
 pub const ONLINE_SECS: [u32; 4] = [5, 10, 30, 60];
@@ -437,6 +508,15 @@ pub struct Alert {
     pub detail: String,
     #[serde(default)]
     pub seen: bool,
+    /// Switch alerts: the switch, the faceplate port, and the measure with its limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub switch_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -474,6 +554,7 @@ mod tests {
             ports: vec![],
             online: false,
             online_secs: 10,
+            rules: AlertRules::default(),
         }
     }
 

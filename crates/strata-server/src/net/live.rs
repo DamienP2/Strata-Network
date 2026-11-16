@@ -90,6 +90,8 @@ struct Memory {
     system_read: Option<Instant>,
     setup: Option<VlanSetup>,
     vlans_read: Option<Instant>,
+    /// Every interface's name by ifIndex, from the last read.
+    names: HashMap<u32, String>,
 }
 
 #[derive(Default)]
@@ -97,6 +99,11 @@ pub struct Runner {
     pub live: Live,
     mem: Memory,
     task: Option<AbortHandle>,
+    /// The slow reads (neighbours, optics, health…) and their task.
+    pub info: super::info::InfoMem,
+    pub(super) info_task: Option<AbortHandle>,
+    /// What the alert rules remember.
+    pub(super) watch: super::info::Watch,
 }
 
 // ── Computations ──
@@ -123,9 +130,11 @@ fn push(h: &mut Vec<u64>, v: u64) {
     }
 }
 
-/// The ports after a new reading: rates from the counter deltas, history kept from `prev`.
-fn read_ports(sw: &Switch, stats: &[IfStat], prev: &[LivePort], counters: &mut HashMap<u32, (u64, u64, Instant)>, now: Instant) -> Vec<LivePort> {
+/// The ports after a new reading: rates from the counter deltas, history kept from `prev`;
+/// and the new rates (port, in, out).
+fn read_ports(sw: &Switch, stats: &[IfStat], prev: &[LivePort], counters: &mut HashMap<u32, (u64, u64, Instant)>, now: Instant) -> (Vec<LivePort>, Vec<(u16, u64, u64)>) {
     let mut out = Vec::new();
+    let mut samples = Vec::new();
     for (n, i) in match_ports(sw, stats) {
         let st = &stats[i];
         let old = prev.iter().find(|p| p.n == n && p.if_index == st.if_index);
@@ -150,12 +159,13 @@ fn read_ports(sw: &Switch, stats: &[IfStat], prev: &[LivePort], counters: &mut H
                 p.out_bps = o;
                 push(&mut p.in_history, i);
                 push(&mut p.out_history, o);
+                samples.push((n, i, o));
             }
         }
         counters.insert(st.if_index, (st.in_octets, st.out_octets, now));
         out.push(p);
     }
-    out
+    (out, samples)
 }
 
 /// The VLAN setup of each matched port.
@@ -286,12 +296,20 @@ pub fn take(sw: &mut Switch, live: &Live, which: Option<&[u16]>, known: &[u16]) 
 }
 
 impl Runner {
-    /// Puts a new reading in: ports and rates, system, VLANs, differences.
-    fn update(&mut self, sw: &Switch, stats: &[IfStat], now: Instant) {
-        self.live.ports = read_ports(sw, stats, &self.live.ports, &mut self.mem.counters, now);
+    /// Puts a new reading in: ports and rates, system, VLANs, differences. Returns the new rates.
+    fn update(&mut self, sw: &Switch, stats: &[IfStat], now: Instant) -> Vec<(u16, u64, u64)> {
+        let (ports, samples) = read_ports(sw, stats, &self.live.ports, &mut self.mem.counters, now);
+        self.live.ports = ports;
         self.live.at = now_ms();
         self.live.error = None;
+        self.mem.names = stats.iter().filter(|s| !s.name.is_empty()).map(|s| (s.if_index, s.name.clone())).collect();
         self.refresh(sw);
+        samples
+    }
+
+    /// Every interface's name by ifIndex.
+    pub fn names(&self) -> &HashMap<u32, String> {
+        &self.mem.names
     }
 
     /// System uptime brought to now, VLANs and differences from the inventory as it is.
@@ -315,12 +333,15 @@ impl Net {
         if let Some(old) = r.task.replace(task) {
             old.abort();
         }
+        self.start_info(id, r);
     }
 
     /// Stops reading the switch and forgets what was read.
     pub fn stop_live(&self, id: &str) {
-        if let Some(t) = self.live.lock().unwrap().remove(id).and_then(|r| r.task) {
-            t.abort();
+        if let Some(r) = self.live.lock().unwrap().remove(id) {
+            for t in [r.task, r.info_task].into_iter().flatten() {
+                t.abort();
+            }
         }
     }
 
@@ -356,7 +377,9 @@ impl Net {
             self.read_live(&id).await;
             tokio::time::sleep(Duration::from_secs(u64::from(secs.max(1)))).await;
         }
-        self.live.lock().unwrap().remove(&id);
+        if let Some(t) = self.live.lock().unwrap().remove(&id).and_then(|r| r.info_task) {
+            t.abort();
+        }
     }
 
     /// One read: states and counters; identity and VLAN setup when due.
@@ -383,6 +406,8 @@ impl Net {
         let result = read.await;
         let now = Instant::now();
         let Some(sw) = self.store.lock().unwrap().switches.iter().find(|s| s.id == id).cloned() else { return };
+        let mut samples = Vec::new();
+        let mut raised = Vec::new();
         let live = {
             let mut map = self.live.lock().unwrap();
             let Some(r) = map.get_mut(id) else { return };
@@ -400,7 +425,9 @@ impl Net {
                             r.mem.setup = setup;
                         }
                     }
-                    r.update(&sw, &stats, now);
+                    samples = r.update(&sw, &stats, now);
+                    let diffs = r.live.vlans.is_some().then_some(r.live.diffs.as_slice());
+                    raised = super::info::check_live(&mut r.watch, &sw.rules, &sw, &r.live.ports, diffs, r.live.at, now);
                 }
                 Err(e) => {
                     tracing::warn!("live read of {}: {e}", sw.name);
@@ -410,6 +437,8 @@ impl Net {
             }
             r.live.clone()
         };
+        self.record_rates(id, &samples);
+        self.raise_switch(&sw, raised);
         self.send_live(id, &live);
     }
 }
@@ -436,18 +465,18 @@ mod tests {
         let s = sw();
         let mut counters = HashMap::new();
         let t0 = Instant::now();
-        let p = read_ports(&s, &[stat(10101, "GigabitEthernet1/0/1", 1_000, 0)], &[], &mut counters, t0);
+        let (p, _) = read_ports(&s, &[stat(10101, "GigabitEthernet1/0/1", 1_000, 0)], &[], &mut counters, t0);
         assert_eq!((p[0].in_bps, p[0].in_history.len()), (0, 0));
         let t1 = t0 + Duration::from_secs(10);
-        let p = read_ports(&s, &[stat(10101, "GigabitEthernet1/0/1", 126_000, 12_500)], &p, &mut counters, t1);
+        let (p, _) = read_ports(&s, &[stat(10101, "GigabitEthernet1/0/1", 126_000, 12_500)], &p, &mut counters, t1);
         assert_eq!((p[0].in_bps, p[0].out_bps), (100_000, 10_000));
         assert_eq!(p[0].in_history, vec![100_000]);
         // The counter went back (restart): the sample is skipped, the last rate stays.
         let t2 = t1 + Duration::from_secs(10);
-        let p = read_ports(&s, &[stat(10101, "GigabitEthernet1/0/1", 50, 12_600)], &p, &mut counters, t2);
+        let (p, _) = read_ports(&s, &[stat(10101, "GigabitEthernet1/0/1", 50, 12_600)], &p, &mut counters, t2);
         assert_eq!((p[0].in_bps, p[0].in_history.len()), (100_000, 1));
         let t3 = t2 + Duration::from_secs(10);
-        let p = read_ports(&s, &[stat(10101, "GigabitEthernet1/0/1", 1_300, 12_600)], &p, &mut counters, t3);
+        let (p, _) = read_ports(&s, &[stat(10101, "GigabitEthernet1/0/1", 1_300, 12_600)], &p, &mut counters, t3);
         assert_eq!((p[0].in_bps, p[0].in_history.len()), (1_000, 2));
     }
 

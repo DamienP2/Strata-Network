@@ -32,7 +32,8 @@
 :root[data-theme='light'] :is(.log-box) { --bg: #0b0c12; --panel: #12141d; --panel-2: #181b26; --panel-3: #1f2331; --line: #262a3a; --line-2: #323750; --text: #e6e8f2; --text-2: #a3a8bf; --text-3: #8a90ad; color-scheme: dark; }
 :root[data-theme='light'] .badge.bad { color: var(--t-red); }
 :root[data-theme='light'] .log-box { --pvw: #22c55e; --warn: #f5a524; --live: #ff3b5c; --accent-2: #bfcaff; }
-:root[data-theme='light'] .sw-face { --line-2: #323750; --accent: #8fa3ff; }
+:root[data-theme='light'] .sw-face { --line-2: #323750; --accent: #8fa3ff; --accent-2: #bfcaff; --panel: #12141d; --key: #f5c542; }
+:root[data-theme='light'] .tagx.blk { color: var(--t-red); }
 :root[data-theme='light'] .preview { --line-2: #323750; --panel-3: #1f2331; --accent: #8fa3ff; }
 :root[data-theme='light'] .kind.bad { color: var(--t-red); }
 :root[data-theme='light'] .kind.data { color: var(--t-pink); }

@@ -18,12 +18,12 @@ import {
   Tv,
   Wifi,
 } from 'lucide-react';
-import { locale, t } from '../i18n';
+import { locale, t, tc, tn } from '../i18n';
 import { api, useApp, useChanged } from '../store';
 import { errorText } from '../ui/serverError';
 import { fmtAgo, toMs } from '../ui/format';
 import { inSubnet } from './ip';
-import type { Address, AlertKind, Kind, Network, Stream, Switch, SwitchPort, Vlan } from './types';
+import type { Address, Alert, AlertKind, Kind, Network, Stream, Switch, SwitchPort, Vlan } from './types';
 
 /** Toast d'erreur d'une exception (texte traduit, brut en infobulle). */
 export function fail(e: unknown) {
@@ -276,7 +276,26 @@ export const streamKey = (s: Pick<Stream, 'group' | 'port' | 'source'>) => `${s.
 
 /* ---------- Alertes ---------- */
 
-export const ALERT_KINDS: AlertKind[] = ['newHost', 'hostGone', 'ipConflict', 'vlanMismatch', 'watchDown', 'watchUp'];
+export const ALERT_KINDS: AlertKind[] = [
+  'newHost',
+  'hostGone',
+  'ipConflict',
+  'vlanMismatch',
+  'watchDown',
+  'watchUp',
+  'portDown',
+  'portFlap',
+  'portErrors',
+  'portSaturated',
+  'configDrift',
+  'opticLow',
+  'psuFault',
+  'fanFault',
+  'tempHigh',
+  'poeBudget',
+  'neighbourNew',
+  'neighbourGone',
+];
 
 export function alertLabel(k: AlertKind): string {
   switch (k) {
@@ -292,10 +311,129 @@ export function alertLabel(k: AlertKind): string {
       return t('Watched, unreachable');
     case 'watchUp':
       return t('Watched, back');
+    case 'portDown':
+      return t('Link down');
+    case 'portFlap':
+      return t('Unstable port');
+    case 'portErrors':
+      return t('Port errors');
+    case 'portSaturated':
+      return t('Saturated port');
+    case 'configDrift':
+      return t('Setup difference');
+    case 'opticLow':
+      return t('Weak optic');
+    case 'psuFault':
+      return t('Power supply');
+    case 'fanFault':
+      return t('Fan');
+    case 'tempHigh':
+      return t('Temperature');
+    case 'poeBudget':
+      return t('PoE budget');
+    case 'neighbourNew':
+      return t('New neighbour');
+    case 'neighbourGone':
+      return t('Neighbour gone');
   }
 }
 
-export const ALERT_TONE: Record<AlertKind, string> = { newHost: 'video', hostGone: '', ipConflict: 'bad', vlanMismatch: 'ptp', watchDown: 'bad', watchUp: 'audio' };
+export const ALERT_TONE: Record<AlertKind, string> = {
+  newHost: 'video',
+  hostGone: '',
+  ipConflict: 'bad',
+  vlanMismatch: 'ptp',
+  watchDown: 'bad',
+  watchUp: 'audio',
+  portDown: 'bad',
+  portFlap: '',
+  portErrors: 'ptp',
+  portSaturated: 'ptp',
+  configDrift: 'ptp',
+  opticLow: 'ptp',
+  psuFault: 'bad',
+  fanFault: 'bad',
+  tempHigh: 'ptp',
+  poeBudget: 'ptp',
+  neighbourNew: 'video',
+  neighbourGone: '',
+};
+
+const dec = (v: number, d = 1) => v.toLocaleString(locale(), { maximumFractionDigits: d });
+/** Un nombre signé avec le vrai signe moins : « −11,8 ». */
+export const signed = (v: number, d = 1) => (v < 0 ? `\u2212${dec(-v, d)}` : dec(v, d));
+
+/** L'état d'un ventilateur ou d'une alimentation, tel que le serveur le lit (anglais), en mots de l'interface. */
+export function unitState(s: string): string {
+  const words: Record<string, () => string> = {
+    up: () => t('OK'),
+    on: () => t('OK'),
+    normal: () => t('OK'),
+    enabled: () => t('OK'),
+    down: () => tc('unit', 'stopped'),
+    warning: () => tc('unit', 'warning'),
+    unknown: () => tc('unit', 'unknown'),
+    'off (environment)': () => t('off (environment)'),
+    'off (admin)': () => t('off (admin)'),
+    'off (denied)': () => t('off (denied)'),
+    'off (no input power)': () => t('no input power'),
+    'off (temperature)': () => t('off (temperature)'),
+    'off (fan)': () => t('off (fan)'),
+    failed: () => tc('unit', 'failed'),
+    'on, fan failed': () => t('on, fan failed'),
+    'off (cooling)': () => t('off (cooling)'),
+    'off (connector rating)': () => t('off (connector rating)'),
+    'on, inline power failed': () => t('on, inline power failed'),
+    critical: () => tc('unit', 'critical'),
+    shutdown: () => tc('unit', 'shut down'),
+    'not present': () => tc('unit', 'not present'),
+    'not functioning': () => tc('unit', 'not functioning'),
+    disabled: () => tc('unit', 'disabled'),
+    testing: () => tc('unit', 'testing'),
+  };
+  return words[s]?.() ?? s;
+}
+
+/** Le détail d'une alerte de switch, en mots de l'interface (les autres : les faits du serveur). */
+export function alertDetail(a: Alert): string {
+  const v = a.value ?? 0;
+  const lim = a.limit ?? 0;
+  switch (a.kind) {
+    case 'portDown':
+      return a.detail || '—';
+    case 'portFlap':
+      return tn(v, '{n} drop in 10 min', '{n} drops in 10 min', { n: dec(v, 0) });
+    case 'portErrors':
+      return t('{n} per minute (limit {limit})', { n: dec(v, 0), limit: dec(lim, 0) });
+    case 'portSaturated':
+      return t('{n} % for 1 min (limit {limit} %)', { n: dec(v), limit: dec(lim, 0) });
+    case 'configDrift': {
+      const [sw, inv] = a.detail.split(' / ');
+      return `${t('Switch: {s}', { s: diffWords(sw ?? '') })} · ${t('Inventory: {s}', { s: diffWords(inv ?? '') })}`;
+    }
+    case 'opticLow':
+      return [a.detail, t('Rx {n} dBm (threshold {limit})', { n: signed(v), limit: signed(lim) })].filter(Boolean).join(' · ');
+    case 'psuFault':
+    case 'fanFault': {
+      const i = a.detail.lastIndexOf(' · ');
+      return i < 0 ? a.detail : `${a.detail.slice(0, i)} · ${unitState(a.detail.slice(i + 3))}`;
+    }
+    case 'tempHigh':
+      return `${a.detail} · ${t('{n} °C (limit {limit} °C)', { n: dec(v), limit: dec(lim, 0) })}`;
+    case 'poeBudget':
+      return t('{n} % of the budget (limit {limit} %)', { n: dec(v), limit: dec(lim, 0) });
+    default:
+      return factText(a.detail);
+  }
+}
+
+/** Les faits du serveur (« access VLAN 10 », « trunk 30, 40 », « disabled ») dans la langue de l'interface. */
+export const diffWords = (s: string) =>
+  s
+    .replace(/^disabled$/, t('port disabled'))
+    .replace(/^access/, t('access'))
+    .replace(/^native VLAN/, t('native VLAN'))
+    .replace(/^no VLAN$/, t('no VLAN'));
 
 /** Les faits du serveur (anglais) : seuls les mots de liaison sont traduits. */
 export const factText = (s: string) => s.replace(/ and /g, ` ${t('and')} `);

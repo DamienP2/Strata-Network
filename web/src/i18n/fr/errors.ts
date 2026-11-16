@@ -45,6 +45,8 @@ export const errors: Record<string, string> = {
   "No network interface": "Aucune interface réseau",
   "No such network": "Réseau introuvable",
   "No such switch": "Switch introuvable",
+  "The range is 1 h, 24 h or 7 days": "La période est 1 h, 24 h ou 7 jours",
+  "No such port": "Port introuvable",
   "No such VLAN": "VLAN introuvable",
   "No such SNMP agent": "Agent SNMP introuvable",
   "No answer": "Pas de réponse",
