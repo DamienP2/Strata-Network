@@ -25,13 +25,13 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 impl Net {
     /// Every MAC known by a router's ARP table.
     pub fn snmp_arp(&self) -> HashMap<Ipv4Addr, String> {
-        let c = self.snmp_cache.lock().unwrap();
+        let c = self.snmp_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         c.arp.values().flat_map(|t| t.iter().map(|(ip, m)| (*ip, m.clone()))).collect()
     }
 
     /// Reads an agent now; records the result in `lastPoll`.
     pub async fn poll(self: &Arc<Self>, id: &str) -> Option<SnmpAgent> {
-        let agent = self.store.lock().unwrap().snmp.iter().find(|a| a.id == id).cloned()?;
+        let agent = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).snmp.iter().find(|a| a.id == id).cloned()?;
         let result = self.poll_agent(&agent).await;
         let poll = match result {
             Ok(msg) => Poll { at: now_ms(), ok: true, message: msg },
@@ -41,7 +41,7 @@ impl Net {
             }
         };
         let out = {
-            let mut st = self.store.lock().unwrap();
+            let mut st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let a = st.snmp.iter_mut().find(|a| a.id == id)?;
             a.last_poll = Some(poll);
             a.clone()
@@ -59,9 +59,9 @@ impl Net {
             let t = s::arp(&session).await.map_err(|e| e.to_string())?;
             said.push(format!("{} arp", t.len()));
             let t = t.into_iter().map(|(ip, m)| (ip, strata_net::mac::format(&m))).collect();
-            self.snmp_cache.lock().unwrap().arp.insert(a.id.clone(), t);
+            self.snmp_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).arp.insert(a.id.clone(), t);
         } else {
-            self.snmp_cache.lock().unwrap().arp.remove(&a.id);
+            self.snmp_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).arp.remove(&a.id);
         }
         if a.read_multicast {
             let routes = s::mroutes(&session).await.map_err(|e| e.to_string())?;
@@ -82,7 +82,7 @@ impl Net {
         let now = Instant::now();
         let mut out = Vec::new();
         {
-            let mut c = self.snmp_cache.lock().unwrap();
+            let mut c = self.snmp_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             for r in routes {
                 let key = (agent.to_string(), r.group, r.source);
                 let rate = c.routes.get(&key).and_then(|(o, p, t)| {
@@ -93,7 +93,7 @@ impl Net {
                 out.push((r.group, r.source, rate));
             }
         }
-        if let Some(e) = self.mcast.lock().unwrap().as_ref() {
+        if let Some(e) = self.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
             for (g, src, rate) in out {
                 e.report_routed(g, src, rate.map(|r| r.0), rate.map(|r| r.1));
             }
@@ -103,7 +103,7 @@ impl Net {
 
     /// Puts what a switch says (MACs, LLDP) on the ports of the switches read through this agent.
     fn apply_switch(&self, agent: &str, names: &HashMap<u32, String>, macs: &[s::Learnt], lldp: &[s::Neighbour]) {
-        let mut st = self.store.lock().unwrap();
+        let mut st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let by_mac: HashMap<String, Ipv4Addr> = st.addresses.values().filter_map(|a| Some((a.mac.clone()?, a.ip))).collect();
         let mut plug: Vec<(Ipv4Addr, PortRef)> = Vec::new();
         for sw in st.switches.iter_mut().filter(|s| s.snmp.as_deref() == Some(agent)) {
@@ -165,7 +165,7 @@ pub fn spawn_poller(net: Arc<Net>) {
         let mut tick = tokio::time::interval(Duration::from_secs(300));
         loop {
             tick.tick().await;
-            let ids: Vec<String> = net.store.lock().unwrap().snmp.iter().map(|a| a.id.clone()).collect();
+            let ids: Vec<String> = net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).snmp.iter().map(|a| a.id.clone()).collect();
             for id in ids {
                 net.poll(&id).await;
             }

@@ -551,17 +551,17 @@ impl Engine {
     /// Turns flood sampling on or off (off when the engine starts).
     pub fn set_flood_watch(&self, on: bool) {
         self.flood_on.store(on, Ordering::Relaxed);
-        self.flood.lock().unwrap().enabled = on;
+        self.flood.lock().unwrap_or_else(std::sync::PoisonError::into_inner).enabled = on;
     }
 
     /// Samples the interface for floods until closed.
     async fn watch_floods(&self) {
         let name = if_addrs::get_if_addrs().unwrap_or_default().into_iter().find(|i| i.ip() == std::net::IpAddr::V4(self.iface)).map(|i| i.name);
         let Some(name) = name else {
-            self.flood.lock().unwrap().error = Some("no interface with this address".into());
+            self.flood.lock().unwrap_or_else(std::sync::PoisonError::into_inner).error = Some("no interface with this address".into());
             return;
         };
-        self.flood.lock().unwrap().iface.clone_from(&name);
+        self.flood.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iface.clone_from(&name);
         // The first sample 10 s after starting (or after being turned on), then every 5 minutes.
         let mut next = Instant::now() + Duration::from_secs(10);
         while !self.closing.load(Ordering::Relaxed) {
@@ -583,12 +583,12 @@ impl Engine {
                 Ok(seen) => {
                     let seen: Vec<_> = if checked { Vec::new() } else { seen };
                     {
-                        let mut st = self.state.lock().unwrap();
+                        let mut st = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         for f in &seen {
                             st.flooded(f, FLOOD_SAMPLE_MS as f64 / 1000.0, now);
                         }
                     }
-                    let mut fs = self.flood.lock().unwrap();
+                    let mut fs = self.flood.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     fs.available = true;
                     fs.error = None;
                     fs.at = now;
@@ -598,7 +598,7 @@ impl Engine {
                     }
                 }
                 Err(e) => {
-                    let mut fs = self.flood.lock().unwrap();
+                    let mut fs = self.flood.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     if fs.error.is_none() {
                         tracing::info!("multicast: flood detection on {name} unavailable: {e}");
                     }
@@ -615,17 +615,17 @@ impl Engine {
 
     /// The state of flood sampling.
     pub fn flood_status(&self) -> FloodStatus {
-        self.flood.lock().unwrap().clone()
+        self.flood.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     /// The clocks heard (PTP).
     pub fn ptp(&self) -> ptp::Snapshot {
-        self.state.lock().unwrap().ptp.snapshot()
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).ptp.snapshot()
     }
 
     /// The SDP text of the last announcement of `group:port`.
     pub fn sdp(&self, group: Ipv4Addr, port: u16) -> Option<String> {
-        self.state.lock().unwrap().sdps.get(&(group, port)).cloned()
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).sdps.get(&(group, port)).cloned()
     }
 
     pub fn iface(&self) -> Ipv4Addr {
@@ -643,14 +643,14 @@ impl Engine {
 
     /// All streams seen or announced.
     pub fn snapshot(&self) -> Vec<Stream> {
-        let mut v: Vec<Stream> = self.state.lock().unwrap().streams.values().cloned().collect();
+        let mut v: Vec<Stream> = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).streams.values().cloned().collect();
         v.sort_by_key(|s| (u32::from(s.group), s.port, s.source.map(u32::from)));
         v
     }
 
     /// Forgets the streams.
     pub fn clear(&self) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         st.streams.clear();
         st.bytes.clear();
         st.ticks.clear();
@@ -660,7 +660,7 @@ impl Engine {
 
     /// Rates of the continuously listened streams (SAP, PTP).
     fn tick(&self) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         st.ptp.prune(now_ms());
         let keys: Vec<Key> = st.streams.iter().filter(|(_, s)| matches!(s.kind, Kind::Ptp | Kind::Sap)).map(|(k, _)| *k).collect();
         for k in keys {
@@ -686,7 +686,7 @@ impl Engine {
                 let Ok(Ok((n, from))) = tokio::time::timeout(Duration::from_secs(1), sock.recv_from(&mut buf)).await else { continue };
                 let SocketAddr::V4(from) = from else { continue };
                 let p = &buf[..n];
-                let mut st = state.lock().unwrap();
+                let mut st = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 st.record(group, port, *from.ip(), p);
                 if port == SAP_PORT {
                     if let Some((delete, sdp)) = parse_sap(p) {
@@ -705,7 +705,7 @@ impl Engine {
     /// A stream seen in a router's multicast routing table (SNMP): no join,
     /// no traffic. The port is unknown (0) unless an announcement gives it.
     pub fn report_routed(&self, group: Ipv4Addr, source: Ipv4Addr, bps: Option<f64>, pps: Option<f64>) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = now_ms();
         let keys: Vec<Key> = st.streams.keys().filter(|k| k.group == group && k.source.is_none_or(|s| s == source)).copied().collect();
         let keys = if keys.is_empty() {
@@ -753,7 +753,7 @@ impl Engine {
         let (mut bytes, mut cut_short) = (0u64, false);
         while let Ok(Ok((n, from))) = tokio::time::timeout_at(deadline, sock.recv_from(&mut buf)).await {
             let SocketAddr::V4(from) = from else { continue };
-            let key = self.state.lock().unwrap().record(group, port, *from.ip(), &buf[..n]);
+            let key = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).record(group, port, *from.ip(), &buf[..n]);
             let e = seen.entry(key).or_default();
             e.0 += n as u64;
             e.1 += 1;
@@ -766,7 +766,7 @@ impl Engine {
         }
         drop(sock); // leaves the group
         let secs = started.elapsed().as_secs_f64().max(0.05);
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (mut bps, mut pps) = (0.0, 0.0);
         for (k, (b, p)) in &seen {
             let (kb, kp) = (*b as f64 * 8.0 / secs, *p as f64 / secs);
@@ -897,7 +897,7 @@ a=fmtp:96 sampling=YCbCr-4:2:2; width=1920; height=1080; exactframerate=50; dept
     #[test]
     fn routed_streams_merge_with_announcements() {
         let e = engine();
-        e.state.lock().unwrap().announce(&parse_sdp(SDP)[0], false);
+        e.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).announce(&parse_sdp(SDP)[0], false);
         e.report_routed(Ipv4Addr::new(239, 10, 1, 1), Ipv4Addr::new(10, 20, 1, 22), Some(1.2e9), Some(110_000.0));
         e.report_routed(Ipv4Addr::new(239, 9, 9, 9), Ipv4Addr::new(10, 0, 0, 9), None, None);
         let s = e.snapshot();

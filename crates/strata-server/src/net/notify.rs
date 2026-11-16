@@ -381,7 +381,7 @@ impl Batch {
 
 /// Starts the task that groups and sends the alerts. Call once.
 pub fn spawn(net: Arc<Net>) {
-    let Some(mut rx) = net.notify.rx.lock().unwrap().take() else { return };
+    let Some(mut rx) = net.notify.rx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() else { return };
     tokio::spawn(async move {
         let mut batch = Batch::default();
         loop {
@@ -395,7 +395,7 @@ pub fn spawn(net: Arc<Net>) {
             let Some(got) = got else { break };
             if let Some(item) = got {
                 let (on, group) = {
-                    let s = net.notify.settings.lock().unwrap();
+                    let s = net.notify.settings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     (s.any_channel() && s.filter.wants(&item.alert.kind), s.filter.group_secs)
                 };
                 if on {
@@ -418,7 +418,7 @@ fn context(net: &Net) -> (String, jiff::tz::TimeZone, Settings) {
         }
         None => (crate::config::PRODUCT.to_string(), jiff::tz::TimeZone::system()),
     };
-    (name, tz, net.notify.settings.lock().unwrap().clone())
+    (name, tz, net.notify.settings.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone())
 }
 
 async fn deliver(net: &Net, items: &[Item]) {
@@ -473,13 +473,13 @@ fn who(me: &Session) -> String {
 
 async fn get_settings(State(s): State<Shared>, me: Session) -> ApiResult<Json<Settings>> {
     require(me.user.is_admin())?;
-    Ok(Json(s.net.notify.settings.lock().unwrap().masked()))
+    Ok(Json(s.net.notify.settings.lock().unwrap_or_else(std::sync::PoisonError::into_inner).masked()))
 }
 
 async fn put_settings(State(s): State<Shared>, me: Session, Json(mut b): Json<Settings>) -> ApiResult<Json<Settings>> {
     require(me.user.is_admin())?;
     let saved = {
-        let mut cur = s.net.notify.settings.lock().unwrap();
+        let mut cur = s.net.notify.settings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         b.unmask(&cur);
         b.check().map_err(bad)?;
         *cur = b.clone();

@@ -294,7 +294,7 @@ impl Net {
 
     /// Runs `f` on the history of a switch, read from its file the first time.
     pub fn with_rates<T>(&self, id: &str, f: impl FnOnce(&mut SwitchRates) -> T) -> T {
-        let mut map = self.rates.lock().unwrap();
+        let mut map = self.rates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !map.contains_key(id) {
             let loaded = match read_json::<SwitchRates>(&self.rates_file(id)) {
                 Ok(v) => v.unwrap_or_default(),
@@ -324,13 +324,13 @@ impl Net {
 
     /// Forgets the history of a deleted switch.
     pub fn forget_rates(&self, id: &str) {
-        self.rates.lock().unwrap().remove(id);
+        self.rates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(id);
         let _ = std::fs::remove_file(self.rates_file(id));
     }
 
     /// Writes the histories changed since the last time.
     pub fn save_rates(&self) {
-        let mut map = self.rates.lock().unwrap();
+        let mut map = self.rates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for (id, r) in map.iter_mut().filter(|(_, r)| r.dirty) {
             r.dirty = false;
             match serde_json::to_vec(&*r) {

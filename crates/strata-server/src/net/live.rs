@@ -462,7 +462,7 @@ impl Runner {
 impl Net {
     /// Starts reading the switch (again, keeping what is known, when the interval changed).
     pub fn start_live(self: &Arc<Self>, id: &str) {
-        let mut map = self.live.lock().unwrap();
+        let mut map = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let r = map.entry(id.to_string()).or_default();
         let net = self.clone();
         let key = id.to_string();
@@ -475,7 +475,7 @@ impl Net {
 
     /// Stops reading the switch and forgets what was read.
     pub fn stop_live(&self, id: &str) {
-        if let Some(r) = self.live.lock().unwrap().remove(id) {
+        if let Some(r) = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(id) {
             for t in [r.task, r.info_task].into_iter().flatten() {
                 t.abort();
             }
@@ -483,14 +483,14 @@ impl Net {
     }
 
     pub fn live_of(&self, id: &str) -> Option<Live> {
-        self.live.lock().unwrap().get(id).map(|r| r.live.clone())
+        self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(id).map(|r| r.live.clone())
     }
 
     /// The inventory of an online switch changed: differences again, sent to the clients.
     pub fn live_changed(&self, id: &str) {
-        let Some(sw) = self.store.lock().unwrap().switches.iter().find(|s| s.id == id).cloned() else { return };
+        let Some(sw) = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).switches.iter().find(|s| s.id == id).cloned() else { return };
         let live = {
-            let mut map = self.live.lock().unwrap();
+            let mut map = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(r) = map.get_mut(id) else { return };
             r.refresh(&sw);
             r.live.clone()
@@ -505,7 +505,7 @@ impl Net {
     async fn live_loop(self: Arc<Self>, id: String) {
         loop {
             let secs = {
-                let st = self.store.lock().unwrap();
+                let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 match st.switches.iter().find(|s| s.id == id) {
                     Some(sw) if sw.online => sw.online_secs,
                     _ => break,
@@ -514,7 +514,7 @@ impl Net {
             self.read_live(&id).await;
             tokio::time::sleep(Duration::from_secs(u64::from(secs.max(1)))).await;
         }
-        if let Some(t) = self.live.lock().unwrap().remove(&id).and_then(|r| r.info_task) {
+        if let Some(t) = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id).and_then(|r| r.info_task) {
             t.abort();
         }
     }
@@ -522,12 +522,12 @@ impl Net {
     /// One read: states and counters; identity and VLAN setup when due.
     async fn read_live(self: &Arc<Self>, id: &str) {
         let agent = {
-            let st = self.store.lock().unwrap();
+            let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let sw = st.switches.iter().find(|s| s.id == id);
             sw.and_then(|sw| sw.snmp.as_deref()).and_then(|a| st.snmp.iter().find(|x| x.id == a)).cloned()
         };
         let (need_system, need_vlans) = {
-            let map = self.live.lock().unwrap();
+            let map = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(r) = map.get(id) else { return };
             let due = |t: Option<Instant>| t.is_none_or(|t| t.elapsed() >= SLOW);
             (due(r.mem.system_read), due(r.mem.vlans_read))
@@ -544,11 +544,11 @@ impl Net {
         };
         let result = read.await;
         let now = Instant::now();
-        let Some(sw) = self.store.lock().unwrap().switches.iter().find(|s| s.id == id).cloned() else { return };
+        let Some(sw) = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).switches.iter().find(|s| s.id == id).cloned() else { return };
         let mut samples = Vec::new();
         let mut raised = Vec::new();
         let live = {
-            let mut map = self.live.lock().unwrap();
+            let mut map = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(r) = map.get_mut(id) else { return };
             match result {
                 Ok((stats, read_at, system, setup)) => {

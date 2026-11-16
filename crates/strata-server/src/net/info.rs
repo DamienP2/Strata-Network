@@ -639,8 +639,8 @@ impl Net {
 
     async fn info_loop(self: Arc<Self>, id: String) {
         loop {
-            let online = self.store.lock().unwrap().switches.iter().any(|s| s.id == id && s.online);
-            if !online || !self.live.lock().unwrap().contains_key(&id) {
+            let online = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).switches.iter().any(|s| s.id == id && s.online);
+            if !online || !self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(&id) {
                 break;
             }
             self.read_info(&id).await;
@@ -650,7 +650,7 @@ impl Net {
 
     async fn read_info(self: &Arc<Self>, id: &str) {
         let agent = {
-            let st = self.store.lock().unwrap();
+            let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let sw = st.switches.iter().find(|s| s.id == id);
             sw.and_then(|sw| sw.snmp.as_deref()).and_then(|a| st.snmp.iter().find(|x| x.id == a)).cloned()
         };
@@ -665,9 +665,9 @@ impl Net {
             Ok(info)
         }
         .await;
-        let Some(sw) = self.store.lock().unwrap().switches.iter().find(|s| s.id == id).cloned() else { return };
+        let Some(sw) = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).switches.iter().find(|s| s.id == id).cloned() else { return };
         let raised = {
-            let mut map = self.live.lock().unwrap();
+            let mut map = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(r) = map.get_mut(id) else { return };
             match result {
                 Ok(info) => {
@@ -699,7 +699,7 @@ impl Net {
     /// What the slow reads found, for the clients (None when the switch is not online).
     pub fn info_of(&self, id: &str) -> Option<InfoView> {
         let (sw, others_data, labels) = {
-            let st = self.store.lock().unwrap();
+            let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let sw = st.switches.iter().find(|s| s.id == id)?.clone();
             // The other switches and their agent's IP.
             let others: Vec<(Switch, Option<Ipv4Addr>)> =
@@ -707,7 +707,7 @@ impl Net {
             (sw, others, st.multicast.labels.clone())
         };
         let (mut view, sysnames) = {
-            let map = self.live.lock().unwrap();
+            let map = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let r = map.get(id)?;
             let ifs = Ifs::of(r.names(), &r.live.ports);
             let streams = self.stream_names(&labels);
@@ -724,7 +724,7 @@ impl Net {
 
     /// The multicast streams seen: group and name (label set by hand, else SAP name).
     fn stream_names(&self, labels: &std::collections::BTreeMap<String, String>) -> Vec<(Ipv4Addr, Option<String>)> {
-        let streams = self.mcast.lock().unwrap().as_ref().map(|e| e.snapshot()).unwrap_or_default();
+        let streams = self.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map(|e| e.snapshot()).unwrap_or_default();
         streams
             .into_iter()
             .map(|s| {
@@ -747,7 +747,7 @@ impl Net {
         }
         let mut raised = false;
         {
-            let mut st = self.store.lock().unwrap();
+            let mut st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let agent_ip = sw.snmp.as_deref().and_then(|a| st.snmp.iter().find(|x| x.id == a)).map(|a| a.ip);
             let ip = sw.ip.or(agent_ip).unwrap_or(Ipv4Addr::UNSPECIFIED);
             for r in list {
@@ -763,7 +763,7 @@ impl Net {
     /// Records the neighbour switches found on these ports as linked (both ends). Returns the links made.
     pub fn link_neighbours(&self, id: &str) -> Option<Vec<(String, String, String)>> {
         let links = self.info_of(id)?.links;
-        let mut st = self.store.lock().unwrap();
+        let mut st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut made = Vec::new();
         for l in links {
             let Some(other) = st.switches.iter_mut().find(|s| s.id == l.switch_id) else { continue };

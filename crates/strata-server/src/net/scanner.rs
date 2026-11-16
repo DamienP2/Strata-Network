@@ -72,7 +72,7 @@ impl Net {
     /// Starts scanning network `id` in the background.
     pub fn start_scan(self: &Arc<Self>, id: &str, by: &str) -> Result<(), (u16, String)> {
         let (net, range) = {
-            let st = self.store.lock().unwrap();
+            let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let net = st.network(id).cloned().ok_or((404, "no such network".to_string()))?;
             let range = cidr::parse(&net.range).map_err(|e| (400, e))?;
             (net, range)
@@ -80,7 +80,7 @@ impl Net {
         let opts = options(&net).map_err(|e| (400, e))?;
         let stop = Stop::default();
         {
-            let mut scans = self.scans.lock().unwrap();
+            let mut scans = self.scans.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if scans.contains_key(id) {
                 return Err((409, "a scan is already running".into()));
             }
@@ -94,17 +94,17 @@ impl Net {
     }
 
     pub fn stop_scan(&self, id: &str) -> bool {
-        self.scans.lock().unwrap().get(id).map(|r| r.stop.stop()).is_some()
+        self.scans.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(id).map(|r| r.stop.stop()).is_some()
     }
 
     async fn scan(self: Arc<Self>, id: String, by: String, range: cidr::Range, opts: Options, stop: Stop) {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(scan::run(range, opts, tx, stop));
         let mut found: HashSet<Ipv4Addr> = HashSet::new();
-        let inventory = self.store.lock().unwrap().network(&id).is_some_and(|n| n.last_scan.is_none());
+        let inventory = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).network(&id).is_some_and(|n| n.last_scan.is_none());
         let mut last_progress = Instant::now() - Duration::from_secs(1);
         let progress = |n: &Net, id: &str, running: bool| {
-            let scans = n.scans.lock().unwrap();
+            let scans = n.scans.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(r) = scans.get(id) {
                 n.send(&serde_json::json!({"type": "scan", "networkId": id, "running": running, "done": r.done, "total": r.total, "up": r.up}));
             }
@@ -114,16 +114,16 @@ impl Net {
                 Event::Host(h) => {
                     found.insert(h.ip);
                     let a = {
-                        let mut st = self.store.lock().unwrap();
+                        let mut st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         merge(&self, &mut st, h, now_ms(), inventory)
                     };
-                    if let Some(r) = self.scans.lock().unwrap().get_mut(&id) {
+                    if let Some(r) = self.scans.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(&id) {
                         r.up += 1;
                     }
                     self.send(&serde_json::json!({"type": "address", "networkId": id, "address": a}));
                 }
                 Event::Progress { done, total } => {
-                    if let Some(r) = self.scans.lock().unwrap().get_mut(&id) {
+                    if let Some(r) = self.scans.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(&id) {
                         r.done = done;
                         r.total = total;
                     }
@@ -135,7 +135,7 @@ impl Net {
                 Event::Done { secs, stopped, .. } => {
                     let now = now_ms();
                     let arp = self.snmp_arp();
-                    let mut st = self.store.lock().unwrap();
+                    let mut st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     // Machines only a router knows (SNMP ARP table).
                     if !stopped {
                         let quiet: Vec<(Ipv4Addr, String)> = arp.into_iter().filter(|(ip, _)| range.contains(*ip) && !found.contains(ip)).collect();
@@ -176,11 +176,11 @@ impl Net {
                     st.prune();
                     let name = st.network(&id).map(|n| n.name.clone()).unwrap_or_default();
                     drop(st);
-                    if let Some(r) = self.scans.lock().unwrap().get_mut(&id) {
+                    if let Some(r) = self.scans.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(&id) {
                         r.up = up;
                     }
                     progress(&self, &id, false);
-                    self.scans.lock().unwrap().remove(&id);
+                    self.scans.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id);
                     self.save(&[File::Addresses, File::Networks, File::Alerts]);
                     self.changed("addresses");
                     self.changed("networks");
@@ -190,7 +190,7 @@ impl Net {
             }
         }
         // The engine ended without Done (should not happen): never leave a scan "running".
-        if self.scans.lock().unwrap().remove(&id).is_some() {
+        if self.scans.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id).is_some() {
             progress(&self, &id, false);
         }
     }
@@ -198,7 +198,7 @@ impl Net {
     /// Scans one address now and returns it.
     pub async fn scan_one(self: &Arc<Self>, ip: Ipv4Addr, by: &str) -> Address {
         let opts = {
-            let st = self.store.lock().unwrap();
+            let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             st.network_of(ip).and_then(|n| options(n).ok()).unwrap_or_default()
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -210,7 +210,7 @@ impl Net {
             }
         }
         let a = {
-            let mut st = self.store.lock().unwrap();
+            let mut st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             match host {
                 Some(h) => merge(self, &mut st, h, now_ms(), false),
                 None => {
@@ -237,7 +237,7 @@ pub fn spawn_scheduler(net: Arc<Net>) {
             tick.tick().await;
             let now = now_ms();
             let due: Vec<String> = {
-                let st = net.store.lock().unwrap();
+                let st = net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 st.networks
                     .iter()
                     .filter(|n| n.schedule_mins > 0 && n.last_scan.as_ref().is_none_or(|l| now - l.at >= i64::from(n.schedule_mins) * 60_000))
@@ -245,7 +245,7 @@ pub fn spawn_scheduler(net: Arc<Net>) {
                     .collect()
             };
             for id in due {
-                if !net.scans.lock().unwrap().contains_key(&id) {
+                if !net.scans.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(&id) {
                     let _ = net.start_scan(&id, "scheduler");
                 }
             }
@@ -262,7 +262,7 @@ pub fn spawn_monitor(net: Arc<Net>) {
         loop {
             tick.tick().await;
             let watched: Vec<(Ipv4Addr, Vec<u16>)> = {
-                let st = net.store.lock().unwrap();
+                let st = net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 st.addresses.values().filter(|a| a.watched).map(|a| (a.ip, a.ports.iter().map(|p| p.port).collect())).collect()
             };
             if watched.is_empty() {
@@ -289,8 +289,8 @@ pub fn spawn_monitor(net: Arc<Net>) {
             let results = futures_util::future::join_all(checks).await;
             let mut alerted = false;
             {
-                let mut st = net.store.lock().unwrap();
-                let mut fails = net.watch.lock().unwrap();
+                let mut st = net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut fails = net.watch.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let now = now_ms();
                 for (ip, rtt) in results {
                     let key = u32::from(ip);

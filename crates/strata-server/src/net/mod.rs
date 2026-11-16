@@ -191,7 +191,7 @@ impl Net {
         multicast::start(&net);
         multicast::spawn_services(net.clone());
         notify::spawn(net.clone());
-        let online: Vec<String> = net.store.lock().unwrap().switches.iter().filter(|s| s.online).map(|s| s.id.clone()).collect();
+        let online: Vec<String> = net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).switches.iter().filter(|s| s.online).map(|s| s.id.clone()).collect();
         for id in online {
             net.start_live(&id);
         }
@@ -217,7 +217,7 @@ impl Net {
 
     /// Writes the files (from the store as it is now).
     pub fn save(&self, files: &[File]) {
-        let st = self.store.lock().unwrap();
+        let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for f in files {
             let bytes = match f {
                 File::Networks => serde_json::to_vec_pretty(&st.networks),
@@ -247,7 +247,7 @@ impl Net {
     /// Writes one entry of the history.
     pub fn log(&self, user: &str, action: &str, target: &str, detail: &str) {
         {
-            let mut st = self.store.lock().unwrap();
+            let mut st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let now = now_ms();
             st.history.push(HistoryEntry { at: now, user: user.into(), action: action.into(), target: target.into(), detail: detail.into() });
             let cutoff = now - HISTORY_DAYS * 86_400_000;
@@ -304,7 +304,7 @@ impl Net {
     }
 
     pub fn snapshot_scans(&self) -> serde_json::Value {
-        let scans = self.scans.lock().unwrap();
+        let scans = self.scans.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         serde_json::Value::Object(scans.iter().map(|(id, r)| (id.clone(), serde_json::json!({"done": r.done, "total": r.total, "up": r.up}))).collect())
     }
 }

@@ -1346,7 +1346,7 @@ impl Net {
         let mut inp = Input { now: now_ms() as u64, ..Input::default() };
         let mut online: Vec<String> = Vec::new();
         {
-            let st = self.store.lock().unwrap();
+            let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             inp.labels = st.multicast.labels.clone();
             inp.check_max_mbps = st.multicast.check_max_mbps;
             inp.more = st.multicast.more.clone();
@@ -1376,7 +1376,7 @@ impl Net {
                 .collect();
         }
         {
-            let map = self.live.lock().unwrap();
+            let map = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             for sw in inp.switches.iter_mut().filter(|s| online.contains(&s.id)) {
                 let Some(r) = map.get(&sw.id) else { continue };
                 let Some(d) = &r.info.data else { continue };
@@ -1390,7 +1390,7 @@ impl Net {
             }
         }
         inp.arp = self.snmp_arp();
-        if let Some(e) = self.mcast.lock().unwrap().as_ref() {
+        if let Some(e) = self.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
             inp.streams = e.snapshot();
             inp.ptp = e.ptp();
             inp.flood = e.flood_status();
@@ -1408,13 +1408,13 @@ impl Net {
     /// (a video whose rate is not known is refused too).
     pub fn check_guard(&self, group: Ipv4Addr, port: u16) -> ApiResult<()> {
         let (enabled, max) = {
-            let st = self.store.lock().unwrap();
+            let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (st.multicast.more.check_enabled, st.multicast.check_max_mbps)
         };
         if !enabled {
             return Err(status(403, "the stream check is turned off"));
         }
-        let streams: Vec<Stream> = self.mcast.lock().unwrap().as_ref().map(|e| e.snapshot()).unwrap_or_default().into_iter().filter(|s| s.group == group && s.port == port).collect();
+        let streams: Vec<Stream> = self.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map(|e| e.snapshot()).unwrap_or_default().into_iter().filter(|s| s.group == group && s.port == port).collect();
         check_allowed(&streams, max)
     }
 }
@@ -1606,14 +1606,14 @@ pub fn spawn_watch(net: Arc<Net>) {
             tick.tick().await;
             let v = net.flows();
             let generation = GENERATION.load(std::sync::atomic::Ordering::Relaxed);
-            let (alerts, changes) = evaluate(&mut watch.lock().unwrap(), &v, generation, v.at);
+            let (alerts, changes) = evaluate(&mut watch.lock().unwrap_or_else(std::sync::PoisonError::into_inner), &v, generation, v.at);
             if alerts.is_empty() && changes.is_empty() {
                 continue;
             }
             let mut raised = false;
             {
-                let mut st = net.store.lock().unwrap();
-                let flood_ip = net.mcast.lock().unwrap().as_ref().map(|e| e.iface());
+                let mut st = net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let flood_ip = net.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map(|e| e.iface());
                 for (kind, ip, detail) in alerts {
                     let ip = if kind == "flooding" { flood_ip.unwrap_or(ip) } else { ip };
                     raised |= net.alert(&mut st, kind, ip, detail);
@@ -1683,7 +1683,7 @@ async fn set_group_label(State(s): State<Shared>, me: Session, Path(group): Path
     let g = group_arg(&group)?;
     let label = b.label.trim().to_string();
     {
-        let mut st = s.net.store.lock().unwrap();
+        let mut st = s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if label.is_empty() {
             st.multicast.more.group_labels.remove(&g);
         } else {
@@ -1718,7 +1718,7 @@ fn overlaps(list: &[Range], r: &Range) -> bool {
 }
 
 async fn ranges(State(s): State<Shared>, _me: Session) -> Json<Vec<Range>> {
-    Json(s.net.store.lock().unwrap().multicast.more.ranges.clone())
+    Json(s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).multicast.more.ranges.clone())
 }
 
 async fn create_range(State(s): State<Shared>, me: Session, Json(mut r): Json<Range>) -> ApiResult<Json<Range>> {
@@ -1726,7 +1726,7 @@ async fn create_range(State(s): State<Shared>, me: Session, Json(mut r): Json<Ra
     check_range(&mut r)?;
     r.id = new_id();
     {
-        let mut st = s.net.store.lock().unwrap();
+        let mut st = s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if overlaps(&st.multicast.more.ranges, &r) {
             return Err(status(409, "this range overlaps another one"));
         }
@@ -1744,7 +1744,7 @@ async fn update_range(State(s): State<Shared>, me: Session, Path(id): Path<Strin
     check_range(&mut r)?;
     r.id = id.clone();
     {
-        let mut st = s.net.store.lock().unwrap();
+        let mut st = s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if overlaps(&st.multicast.more.ranges, &r) {
             return Err(status(409, "this range overlaps another one"));
         }
@@ -1761,7 +1761,7 @@ async fn update_range(State(s): State<Shared>, me: Session, Path(id): Path<Strin
 async fn delete_range(State(s): State<Shared>, me: Session, Path(id): Path<String>) -> ApiResult<StatusCode> {
     editor(&me)?;
     let r = {
-        let mut st = s.net.store.lock().unwrap();
+        let mut st = s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let i = st.multicast.more.ranges.iter().position(|x| x.id == id).ok_or_else(|| not_found("range"))?;
         st.multicast.more.ranges.remove(i)
     };
@@ -1772,7 +1772,7 @@ async fn delete_range(State(s): State<Shared>, me: Session, Path(id): Path<Strin
 }
 
 async fn reservations(State(s): State<Shared>, _me: Session) -> Json<Vec<Reservation>> {
-    Json(s.net.store.lock().unwrap().multicast.more.reservations.clone())
+    Json(s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).multicast.more.reservations.clone())
 }
 
 async fn create_reservation(State(s): State<Shared>, me: Session, Json(mut r): Json<Reservation>) -> ApiResult<Json<Reservation>> {
@@ -1782,7 +1782,7 @@ async fn create_reservation(State(s): State<Shared>, me: Session, Json(mut r): J
     }
     r.name = r.name.trim().to_string();
     {
-        let mut st = s.net.store.lock().unwrap();
+        let mut st = s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let list = &mut st.multicast.more.reservations;
         if list.iter().any(|x| x.group == r.group) {
             return Err(status(409, "this group is already reserved"));
@@ -1805,7 +1805,7 @@ async fn update_reservation(State(s): State<Shared>, me: Session, Path(group): P
     editor(&me)?;
     let g = group_arg(&group)?;
     let r = {
-        let mut st = s.net.store.lock().unwrap();
+        let mut st = s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let x = st.multicast.more.reservations.iter_mut().find(|x| x.group == g).ok_or_else(|| not_found("reservation"))?;
         x.name = b.name.trim().to_string();
         x.clone()
@@ -1820,7 +1820,7 @@ async fn delete_reservation(State(s): State<Shared>, me: Session, Path(group): P
     editor(&me)?;
     let g = group_arg(&group)?;
     {
-        let mut st = s.net.store.lock().unwrap();
+        let mut st = s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let list = &mut st.multicast.more.reservations;
         let i = list.iter().position(|x| x.group == g).ok_or_else(|| not_found("reservation"))?;
         list.remove(i);
@@ -1832,12 +1832,12 @@ async fn delete_reservation(State(s): State<Shared>, me: Session, Path(group): P
 }
 
 async fn rules(State(s): State<Shared>, _me: Session) -> Json<McastRules> {
-    Json(s.net.store.lock().unwrap().multicast.more.rules.clone())
+    Json(s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).multicast.more.rules.clone())
 }
 
 async fn set_rules(State(s): State<Shared>, me: Session, Json(r): Json<McastRules>) -> ApiResult<Json<McastRules>> {
     editor(&me)?;
-    s.net.store.lock().unwrap().multicast.more.rules = r.clone();
+    s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).multicast.more.rules = r.clone();
     s.net.save(&[File::Multicast]);
     s.net.changed("multicast");
     s.net.log(&who(&me), "changed multicast alert rules", "", "");
@@ -1847,7 +1847,7 @@ async fn set_rules(State(s): State<Shared>, me: Session, Json(r): Json<McastRule
 async fn set_options(State(s): State<Shared>, me: Session, Json(o): Json<McastOptions>) -> ApiResult<StatusCode> {
     require(me.user.is_admin())?;
     let flood = {
-        let mut st = s.net.store.lock().unwrap();
+        let mut st = s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let m = &mut st.multicast.more;
         if let Some(v) = o.check_enabled {
             m.check_enabled = v;
@@ -1857,7 +1857,7 @@ async fn set_options(State(s): State<Shared>, me: Session, Json(o): Json<McastOp
         }
         m.flood_watch
     };
-    if let Some(e) = s.net.mcast.lock().unwrap().as_ref() {
+    if let Some(e) = s.net.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
         e.set_flood_watch(flood);
     }
     s.net.save(&[File::Multicast]);
@@ -1869,7 +1869,7 @@ async fn set_options(State(s): State<Shared>, me: Session, Json(o): Json<McastOp
 
 async fn sdp(State(s): State<Shared>, _me: Session, Path((group, port)): Path<(String, u16)>) -> ApiResult<impl IntoResponse> {
     let g = group_arg(&group)?;
-    let text = s.net.mcast.lock().unwrap().as_ref().and_then(|e| e.sdp(g, port)).ok_or_else(|| not_found("sdp"))?;
+    let text = s.net.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().and_then(|e| e.sdp(g, port)).ok_or_else(|| not_found("sdp"))?;
     Ok(([(header::CONTENT_TYPE, "application/sdp; charset=utf-8")], text))
 }
 

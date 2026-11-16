@@ -18,10 +18,10 @@ pub fn iface_ip(name: &str) -> Option<Ipv4Addr> {
 /// (Re)starts listening on the interface of the settings.
 pub fn start(net: &Arc<Net>) {
     let (name, flood) = {
-        let st = net.store.lock().unwrap();
+        let st = net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (st.multicast.iface.clone(), st.multicast.more.flood_watch)
     };
-    let mut slot = net.mcast.lock().unwrap();
+    let mut slot = net.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(old) = slot.take() {
         old.close();
     }
@@ -45,7 +45,7 @@ pub fn start(net: &Arc<Net>) {
             let mut last = (0usize, 0u64);
             loop {
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                let now = n.mcast.lock().unwrap().as_ref().map(|e| {
+                let now = n.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map(|e| {
                     let s = e.snapshot();
                     (s.len(), s.iter().map(|x| x.last_seen).max().unwrap_or(0))
                 });
@@ -64,13 +64,13 @@ impl Net {
     /// Asks the network for its services (mDNS) and keeps the answers.
     pub async fn browse(self: &Arc<Self>) {
         let ip = {
-            let name = self.store.lock().unwrap().multicast.iface.clone();
+            let name = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).multicast.iface.clone();
             iface_ip(&name)
         };
         let Some(ip) = ip else { return };
         match strata_net::mdns::browse(ip, Duration::from_secs(3)).await {
             Ok(list) => {
-                *self.services.lock().unwrap() = (now_ms(), list);
+                *self.services.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = (now_ms(), list);
                 self.changed("services");
             }
             Err(e) => tracing::warn!("mdns: {e}"),

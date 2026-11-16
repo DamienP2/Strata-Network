@@ -162,7 +162,7 @@ pub fn router() -> Router<Shared> {
 }
 
 async fn open(s: &Shared, id: &str) -> ApiResult<snmp::Session> {
-    let a = s.net.store.lock().unwrap().snmp.iter().find(|x| x.id == id).cloned().ok_or_else(|| not_found("snmp agent"))?;
+    let a = s.net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).snmp.iter().find(|x| x.id == id).cloned().ok_or_else(|| not_found("snmp agent"))?;
     super::snmp::session(&a).await.map_err(|e| status(502, e))
 }
 

@@ -84,7 +84,7 @@ fn ip(s: &str) -> ApiResult<Ipv4Addr> {
 // ── Networks ──
 
 async fn networks(State(s): State<Shared>, _me: Session) -> Json<Vec<Network>> {
-    Json(net(&s).store.lock().unwrap().networks.clone())
+    Json(net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).networks.clone())
 }
 
 fn check_network(n: &mut Network) -> ApiResult<()> {
@@ -112,7 +112,7 @@ async fn create_network(State(s): State<Shared>, me: Session, Json(mut n): Json<
     check_network(&mut n)?;
     n.id = new_id();
     n.last_scan = None;
-    net(&s).store.lock().unwrap().networks.push(n.clone());
+    net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).networks.push(n.clone());
     net(&s).save(&[File::Networks]);
     net(&s).changed("networks");
     net(&s).log(&who(&me.user), "created network", &n.name, &n.range);
@@ -123,7 +123,7 @@ async fn update_network(State(s): State<Shared>, me: Session, Path(id): Path<Str
     editor(&me)?;
     check_network(&mut n)?;
     {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let cur = st.networks.iter_mut().find(|x| x.id == id).ok_or_else(|| not_found("network"))?;
         n.id = id;
         n.last_scan = cur.last_scan.clone();
@@ -139,7 +139,7 @@ async fn delete_network(State(s): State<Shared>, me: Session, Path(id): Path<Str
     editor(&me)?;
     net(&s).stop_scan(&id);
     let name = {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let i = st.networks.iter().position(|x| x.id == id).ok_or_else(|| not_found("network"))?;
         st.networks.remove(i).name
     };
@@ -150,7 +150,7 @@ async fn delete_network(State(s): State<Shared>, me: Session, Path(id): Path<Str
 }
 
 fn range_of(s: &Shared, id: &str) -> ApiResult<(Network, strata_net::cidr::Range)> {
-    let st = net(s).store.lock().unwrap();
+    let st = net(s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let n = st.network(id).cloned().ok_or_else(|| not_found("network"))?;
     let r = strata_net::cidr::parse(&n.range).map_err(bad)?;
     Ok((n, r))
@@ -158,7 +158,7 @@ fn range_of(s: &Shared, id: &str) -> ApiResult<(Network, strata_net::cidr::Range
 
 async fn addresses(State(s): State<Shared>, _me: Session, Path(id): Path<String>) -> ApiResult<Json<Vec<Address>>> {
     let (_, r) = range_of(&s, &id)?;
-    let st = net(&s).store.lock().unwrap();
+    let st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok(Json(st.addresses.range(r.start..=r.end).map(|(_, a)| a.clone()).collect()))
 }
 
@@ -176,7 +176,7 @@ async fn stop_scan(State(s): State<Shared>, me: Session, Path(id): Path<String>)
 
 async fn next_free(State(s): State<Shared>, _me: Session, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let (n, r) = range_of(&s, &id)?;
-    let st = net(&s).store.lock().unwrap();
+    let st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let free = r.iter().find(|ip| Some(*ip) != n.gateway && st.addresses.get(&u32::from(*ip)).is_none_or(|a| a.state() == "free"));
     Ok(Json(json!({ "ip": free })))
 }
@@ -191,7 +191,7 @@ fn csv_field(s: &str) -> String {
 
 async fn export_csv(State(s): State<Shared>, _me: Session, Path(id): Path<String>) -> ApiResult<impl IntoResponse> {
     let (n, r) = range_of(&s, &id)?;
-    let st = net(&s).store.lock().unwrap();
+    let st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut out = String::from("ip,state,label,kind,name,mac,vendor,ports,notes,reserved,lastSeen\r\n");
     for ip in r.iter() {
         let a = st.addresses.get(&u32::from(ip)).cloned().unwrap_or_else(|| Address::new(ip));
@@ -259,7 +259,7 @@ async fn import_csv(State(s): State<Shared>, me: Session, Path(id): Path<String>
     let ip_col = col("ip").ok_or_else(|| bad("the file has no ip column"))?;
     let mut count = 0;
     {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for row in rows.iter().skip(1) {
             let get = |c: Option<usize>| c.and_then(|c| row.get(c)).map(|v| v.trim().to_string());
             let Some(addr) = get(Some(ip_col)).and_then(|v| v.parse::<Ipv4Addr>().ok()).filter(|a| r.contains(*a)) else { continue };
@@ -296,7 +296,7 @@ async fn patch_address(State(s): State<Shared>, me: Session, Path(addr): Path<St
     }
     let mut changes = Vec::new();
     let a = {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let a = st.address(addr);
         for (k, v) in &body {
             let text = || v.as_str().map(|x| x.trim().to_string()).unwrap_or_default();
@@ -336,7 +336,7 @@ async fn scan_address(State(s): State<Shared>, me: Session, Path(addr): Path<Str
 // ── VLANs ──
 
 async fn vlans(State(s): State<Shared>, _me: Session) -> Json<Vec<Vlan>> {
-    Json(net(&s).store.lock().unwrap().vlans.values().cloned().collect())
+    Json(net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).vlans.values().cloned().collect())
 }
 
 fn check_vlan(v: &mut Vlan) -> ApiResult<()> {
@@ -363,7 +363,7 @@ async fn create_vlan(State(s): State<Shared>, me: Session, Json(mut v): Json<Vla
     editor(&me)?;
     check_vlan(&mut v)?;
     {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if st.vlans.contains_key(&v.id) {
             return Err(status(409, "this vlan exists"));
         }
@@ -379,7 +379,7 @@ async fn update_vlan(State(s): State<Shared>, me: Session, Path(id): Path<u16>, 
     editor(&me)?;
     check_vlan(&mut v)?;
     {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !st.vlans.contains_key(&id) {
             return Err(not_found("vlan"));
         }
@@ -414,7 +414,7 @@ async fn update_vlan(State(s): State<Shared>, me: Session, Path(id): Path<u16>, 
 
 async fn delete_vlan(State(s): State<Shared>, me: Session, Path(id): Path<u16>) -> ApiResult<StatusCode> {
     editor(&me)?;
-    let v = net(&s).store.lock().unwrap().vlans.remove(&id).ok_or_else(|| not_found("vlan"))?;
+    let v = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).vlans.remove(&id).ok_or_else(|| not_found("vlan"))?;
     net(&s).save(&[File::Vlans]);
     net(&s).changed("vlans");
     net(&s).log(&who(&me.user), "deleted vlan", &format!("{} {}", v.id, v.name), "");
@@ -424,7 +424,7 @@ async fn delete_vlan(State(s): State<Shared>, me: Session, Path(id): Path<u16>) 
 // ── Switches ──
 
 async fn switches(State(s): State<Shared>, _me: Session) -> Json<Vec<Switch>> {
-    Json(net(&s).store.lock().unwrap().switches.clone())
+    Json(net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).switches.clone())
 }
 
 fn check_switch(sw: &mut Switch) -> ApiResult<()> {
@@ -453,7 +453,7 @@ async fn create_switch(State(s): State<Shared>, me: Session, Json(mut sw): Json<
     editor(&me)?;
     sw.id = new_id();
     check_switch(&mut sw)?;
-    net(&s).store.lock().unwrap().switches.push(sw.clone());
+    net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).switches.push(sw.clone());
     net(&s).save(&[File::Switches]);
     net(&s).changed("switches");
     net(&s).log(&who(&me.user), "created switch", &sw.name, &sw.model);
@@ -464,7 +464,7 @@ async fn update_switch(State(s): State<Shared>, me: Session, Path(id): Path<Stri
     editor(&me)?;
     sw.id = id.clone();
     {
-        let st = net(&s).store.lock().unwrap();
+        let st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let cur = st.switches.iter().find(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
         if sw.ports.is_empty() {
             sw.ports = cur.ports.clone();
@@ -475,10 +475,10 @@ async fn update_switch(State(s): State<Shared>, me: Session, Path(id): Path<Stri
         // Rules too (their own route).
         sw.rules = cur.rules.clone();
     }
-    let was_online = net(&s).live.lock().unwrap().contains_key(&id);
+    let was_online = net(&s).live.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(&id);
     check_switch(&mut sw)?;
     {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(cur) = st.switches.iter_mut().find(|x| x.id == id) {
             *cur = sw.clone();
         }
@@ -500,7 +500,7 @@ async fn update_switch(State(s): State<Shared>, me: Session, Path(id): Path<Stri
 async fn delete_switch(State(s): State<Shared>, me: Session, Path(id): Path<String>) -> ApiResult<StatusCode> {
     editor(&me)?;
     let name = {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let i = st.switches.iter().position(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
         let name = st.switches.remove(i).name;
         for p in st.switches.iter_mut().flat_map(|s| s.ports.iter_mut()) {
@@ -532,7 +532,7 @@ struct PortsPatch {
 async fn patch_ports(State(s): State<Shared>, me: Session, Path(id): Path<String>, Json(body): Json<PortsPatch>) -> ApiResult<Json<Switch>> {
     editor(&me)?;
     let (sw, detail) = {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let vlans: Vec<u16> = st.vlans.keys().copied().collect();
         let sw = st.switches.iter_mut().find(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
         let mut names = Vec::new();
@@ -596,7 +596,7 @@ async fn set_online(State(s): State<Shared>, me: Session, Path(id): Path<String>
         return Err(bad("the read interval is 5, 10, 30 or 60 seconds"));
     }
     let (name, was, on, secs) = {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let sw = st.switches.iter_mut().find(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
         let on = b.online.unwrap_or(sw.online);
         if on && sw.snmp.is_none() {
@@ -640,7 +640,7 @@ async fn take_from_switch(State(s): State<Shared>, me: Session, Path(id): Path<S
         return Err(status(409, "the vlan setup of the switch is not known yet"));
     }
     let (sw, names) = {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let known: Vec<u16> = st.vlans.keys().copied().collect();
         let sw = st.switches.iter_mut().find(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
         let names = super::live::take(sw, &live, b.ports.as_deref(), &known);
@@ -668,7 +668,7 @@ struct RangeQ {
 async fn port_history(State(s): State<Shared>, _me: Session, Path((id, port)): Path<(String, u16)>, Query(q): Query<RangeQ>) -> ApiResult<Json<super::rates::History>> {
     let range = super::rates::Range::parse(q.range.as_deref().unwrap_or("1h")).ok_or_else(|| bad("the range is 1h, 24h or 7d"))?;
     let secs = {
-        let st = net(&s).store.lock().unwrap();
+        let st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let sw = st.switches.iter().find(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
         if !sw.ports.iter().any(|p| p.n == port) {
             return Err(not_found("port"));
@@ -683,7 +683,7 @@ async fn set_rules(State(s): State<Shared>, me: Session, Path(id): Path<String>,
     editor(&me)?;
     rules.clamp();
     let sw = {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let sw = st.switches.iter_mut().find(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
         sw.rules = rules;
         sw.clone()
@@ -698,7 +698,7 @@ async fn link_neighbours(State(s): State<Shared>, me: Session, Path(id): Path<St
     editor(&me)?;
     let made = net(&s).link_neighbours(&id).ok_or_else(|| status(404, "the switch is not online"))?;
     if !made.is_empty() {
-        let name = net(&s).store.lock().unwrap().switches.iter().find(|x| x.id == id).map(|x| x.name.clone()).unwrap_or_default();
+        let name = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).switches.iter().find(|x| x.id == id).map(|x| x.name.clone()).unwrap_or_default();
         net(&s).save(&[File::Switches]);
         net(&s).changed("switches");
         let detail = made.iter().map(|(a, b, c)| format!("{a} ↔ {b} {c}")).collect::<Vec<_>>().join(", ");
@@ -711,7 +711,7 @@ async fn link_neighbours(State(s): State<Shared>, me: Session, Path(id): Path<St
 // ── Switch models and detection ──
 
 async fn switch_models(State(s): State<Shared>, _me: Session) -> Json<Value> {
-    let mine = net(&s).store.lock().unwrap().templates.clone();
+    let mine = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).templates.clone();
     Json(json!({"builtin": super::models::catalog(), "mine": mine}))
 }
 
@@ -726,7 +726,7 @@ async fn create_switch_model(State(s): State<Shared>, me: Session, Json(mut m): 
     clean_groups(&mut m.groups);
     m.id = new_id();
     m.matches.clear();
-    net(&s).store.lock().unwrap().templates.push(m.clone());
+    net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).templates.push(m.clone());
     net(&s).save(&[File::Templates]);
     net(&s).changed("switchModels");
     net(&s).log(&who(&me.user), "saved switch model", &m.model, "");
@@ -736,7 +736,7 @@ async fn create_switch_model(State(s): State<Shared>, me: Session, Json(mut m): 
 async fn delete_switch_model(State(s): State<Shared>, me: Session, Path(id): Path<String>) -> ApiResult<StatusCode> {
     editor(&me)?;
     let name = {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let i = st.templates.iter().position(|x| x.id == id).ok_or_else(|| not_found("switch model"))?;
         st.templates.remove(i).model
     };
@@ -765,7 +765,7 @@ struct Detect {
 async fn detect_switch(State(s): State<Shared>, me: Session, Json(d): Json<Detect>) -> ApiResult<Json<Value>> {
     editor(&me)?;
     let a = {
-        let st = net(&s).store.lock().unwrap();
+        let st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let known = d.agent_id.as_deref().map(|id| st.snmp.iter().find(|x| x.id == id).ok_or_else(|| not_found("snmp agent"))).transpose()?;
         match (d.ip, known) {
             // An agent chosen as it is.
@@ -851,7 +851,7 @@ fn unmask(a: &mut SnmpAgent, cur: Option<&SnmpAgent>) {
 }
 
 async fn snmp_list(State(s): State<Shared>, _me: Session) -> Json<Vec<SnmpAgent>> {
-    Json(net(&s).store.lock().unwrap().snmp.iter().cloned().map(masked).collect())
+    Json(net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).snmp.iter().cloned().map(masked).collect())
 }
 
 fn check_snmp(a: &mut SnmpAgent) -> ApiResult<()> {
@@ -873,7 +873,7 @@ async fn create_snmp(State(s): State<Shared>, me: Session, Json(mut a): Json<Snm
     }
     a.id = new_id();
     a.last_poll = None;
-    net(&s).store.lock().unwrap().snmp.push(a.clone());
+    net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).snmp.push(a.clone());
     net(&s).save(&[File::Snmp]);
     net(&s).changed("snmp");
     net(&s).log(&who(&me.user), "created snmp agent", &a.name, &a.ip.to_string());
@@ -887,7 +887,7 @@ async fn update_snmp(State(s): State<Shared>, me: Session, Path(id): Path<String
     require(me.user.is_admin())?;
     check_snmp(&mut a)?;
     {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let cur = st.snmp.iter_mut().find(|x| x.id == id).ok_or_else(|| not_found("snmp agent"))?;
         unmask(&mut a, Some(cur));
         if let Some(v3) = &a.v3 {
@@ -907,7 +907,7 @@ async fn delete_snmp(State(s): State<Shared>, me: Session, Path(id): Path<String
     require(me.user.is_admin())?;
     let mut offline = Vec::new();
     let name = {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let i = st.snmp.iter().position(|x| x.id == id).ok_or_else(|| not_found("snmp agent"))?;
         for sw in st.switches.iter_mut().filter(|w| w.snmp.as_deref() == Some(&id)) {
             sw.snmp = None;
@@ -962,7 +962,7 @@ async fn snmp_test(State(s): State<Shared>, me: Session, Json(t): Json<SnmpTest>
         last_poll: None,
     };
     {
-        let st = net(&s).store.lock().unwrap();
+        let st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         unmask(&mut a, t.id.as_deref().and_then(|id| st.snmp.iter().find(|x| x.id == id)));
     }
     if let Some(v3) = &a.v3 {
@@ -977,13 +977,13 @@ async fn snmp_test(State(s): State<Shared>, me: Session, Json(t): Json<SnmpTest>
 async fn multicast(State(s): State<Shared>, _me: Session) -> Json<Value> {
     let n = net(&s);
     let (iface, max, labels) = {
-        let st = n.store.lock().unwrap();
+        let st = n.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (st.multicast.iface.clone(), st.multicast.check_max_mbps, st.multicast.labels.clone())
     };
     let streams: Vec<Value> = n
         .mcast
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
         .map(|e| e.snapshot())
         .unwrap_or_default()
@@ -996,7 +996,7 @@ async fn multicast(State(s): State<Shared>, _me: Session) -> Json<Value> {
         })
         .collect();
     let ifaces: Vec<Value> = super::interfaces().into_iter().map(|(name, ip)| json!({"name": name, "ip": ip})).collect();
-    let current = n.mcast.lock().unwrap().as_ref().map(|e| e.iface());
+    let current = n.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map(|e| e.iface());
     let iface = if iface.is_empty() { current.map(|i| i.to_string()).unwrap_or_default() } else { iface };
     Json(json!({ "iface": iface, "ifaces": ifaces, "streams": streams, "checkMaxMbps": max }))
 }
@@ -1011,7 +1011,7 @@ struct McastSet {
 async fn multicast_settings(State(s): State<Shared>, me: Session, Json(b): Json<McastSet>) -> ApiResult<StatusCode> {
     require(me.user.is_admin())?;
     {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         st.multicast.iface = b.iface.clone();
         st.multicast.check_max_mbps = b.check_max_mbps.clamp(1, 10_000);
     }
@@ -1034,8 +1034,8 @@ async fn multicast_check(State(s): State<Shared>, me: Session, Json(t): Json<Mca
         return Err(bad("the port of this stream is not known"));
     }
     net(&s).check_guard(t.group, t.port)?;
-    let max = net(&s).store.lock().unwrap().multicast.check_max_mbps;
-    let engine = net(&s).mcast.lock().unwrap().clone().ok_or_else(|| status(503, "no network interface"))?;
+    let max = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).multicast.check_max_mbps;
+    let engine = net(&s).mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone().ok_or_else(|| status(503, "no network interface"))?;
     let opts = strata_net::mcast::CheckOptions { max_ms: 2000, max_mbps: max };
     let r = engine.check(t.group, t.port, &opts).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::WouldBlock {
@@ -1062,7 +1062,7 @@ async fn multicast_label(State(s): State<Shared>, me: Session, Json(b): Json<Mca
     editor(&me)?;
     let key = format!("{}:{}:{}", b.group, b.port, b.source.map(|x| x.to_string()).unwrap_or_default());
     {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if b.label.trim().is_empty() {
             st.multicast.labels.remove(&key);
         } else {
@@ -1076,7 +1076,7 @@ async fn multicast_label(State(s): State<Shared>, me: Session, Json(b): Json<Mca
 }
 
 async fn services(State(s): State<Shared>, _me: Session) -> Json<Value> {
-    let (at, list) = net(&s).services.lock().unwrap().clone();
+    let (at, list) = net(&s).services.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
     Json(json!({ "at": at, "services": list }))
 }
 
@@ -1090,7 +1090,7 @@ async fn browse(State(s): State<Shared>, me: Session) -> ApiResult<StatusCode> {
 // ── Alerts and history ──
 
 async fn alerts(State(s): State<Shared>, _me: Session) -> Json<Vec<Alert>> {
-    Json(net(&s).store.lock().unwrap().alerts.clone())
+    Json(net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).alerts.clone())
 }
 
 #[derive(Deserialize)]
@@ -1100,7 +1100,7 @@ struct Seen {
 
 async fn alerts_seen(State(s): State<Shared>, _me: Session, Json(b): Json<Seen>) -> ApiResult<StatusCode> {
     {
-        let mut st = net(&s).store.lock().unwrap();
+        let mut st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for a in st.alerts.iter_mut() {
             if b.ids.as_ref().is_none_or(|ids| ids.contains(&a.id)) {
                 a.seen = true;
@@ -1119,7 +1119,7 @@ struct Limit {
 
 async fn history(State(s): State<Shared>, me: Session, Query(q): Query<Limit>) -> ApiResult<Json<Vec<HistoryEntry>>> {
     require(me.user.is_admin())?;
-    let st = net(&s).store.lock().unwrap();
+    let st = net(&s).store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok(Json(st.history.iter().rev().take(q.limit.unwrap_or(2000).min(20_000)).cloned().collect()))
 }
 
