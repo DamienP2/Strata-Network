@@ -94,6 +94,40 @@ export interface Switch {
   sfpNaming: string;
   snmp?: string;
   ports: SwitchPort[];
+  online: boolean;
+  onlineSecs: number;
+}
+
+export interface LivePort {
+  n: number;
+  ifIndex: number;
+  up: boolean;
+  adminUp: boolean;
+  speedMbps: number;
+  inBps: number;
+  outBps: number;
+  inErrors: number;
+  outErrors: number;
+  alias: string;
+  inHistory: number[];
+  outHistory: number[];
+}
+
+export interface LiveDiff {
+  n: number;
+  field: 'mode' | 'vlan' | 'tagged' | 'off';
+  switch: string;
+  inventory: string;
+}
+
+/** Un switch en ligne : ce que le serveur vient d'y lire. */
+export interface Live {
+  at: number;
+  error?: string;
+  system?: { name: string; description: string; uptimeSecs: number; contact: string; location: string; model: string; serial: string; firmware: string };
+  ports: LivePort[];
+  vlans?: { n: number; pvid?: number; untagged: number[]; tagged: number[] }[];
+  diffs: LiveDiff[];
 }
 
 export interface SnmpAgent {

@@ -15,6 +15,7 @@ use crate::paths::{new_id, now_ms, read_json};
 use crate::state::{AppState, Audience};
 
 pub mod api;
+pub mod live;
 pub mod model;
 mod multicast;
 mod scanner;
@@ -95,6 +96,8 @@ pub struct Net {
     pub services: Mutex<(i64, Vec<strata_net::mdns::Service>)>,
     pub snmp_cache: Mutex<snmp::Cache>,
     pub watch: Mutex<HashMap<u32, u32>>,
+    /// Online switches: what was read, and the task reading them.
+    pub live: Mutex<HashMap<String, live::Runner>>,
 }
 
 fn load<T: serde::de::DeserializeOwned + Default>(dir: &std::path::Path, f: File) -> T {
@@ -149,12 +152,17 @@ impl Net {
             services: Mutex::default(),
             snmp_cache: Mutex::default(),
             watch: Mutex::default(),
+            live: Mutex::default(),
         });
         scanner::spawn_scheduler(net.clone());
         scanner::spawn_monitor(net.clone());
         snmp::spawn_poller(net.clone());
         multicast::start(&net);
         multicast::spawn_services(net.clone());
+        let online: Vec<String> = net.store.lock().unwrap().switches.iter().filter(|s| s.online).map(|s| s.id.clone()).collect();
+        for id in online {
+            net.start_live(&id);
+        }
         net
     }
 

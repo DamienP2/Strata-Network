@@ -34,6 +34,9 @@ pub fn router() -> Router<Shared> {
         .route("/api/switches", get(switches).post(create_switch))
         .route("/api/switches/{id}", put(update_switch).delete(delete_switch))
         .route("/api/switches/{id}/ports", patch(patch_ports))
+        .route("/api/switches/{id}/online", patch(set_online))
+        .route("/api/switches/{id}/live", get(switch_live))
+        .route("/api/switches/{id}/take", post(take_from_switch))
         .route("/api/snmp", get(snmp_list).post(create_snmp))
         .route("/api/snmp/test", post(snmp_test))
         .route("/api/snmp/{id}", put(update_snmp).delete(delete_snmp))
@@ -447,7 +450,11 @@ async fn update_switch(State(s): State<Shared>, me: Session, Path(id): Path<Stri
         if sw.ports.is_empty() {
             sw.ports = cur.ports.clone();
         }
+        // Online is changed by its own route; without an agent the switch cannot stay online.
+        sw.online = cur.online && sw.snmp.is_some();
+        sw.online_secs = cur.online_secs;
     }
+    let was_online = net(&s).live.lock().unwrap().contains_key(&id);
     check_switch(&mut sw)?;
     {
         let mut st = net(&s).store.lock().unwrap();
@@ -460,6 +467,12 @@ async fn update_switch(State(s): State<Shared>, me: Session, Path(id): Path<Stri
     net(&s).changed("switches");
     net(&s).changed("alerts");
     net(&s).log(&who(&me.user), "changed switch", &sw.name, "");
+    if was_online && !sw.online {
+        net(&s).stop_live(&id);
+        net(&s).log(&who(&me.user), "switch offline", &sw.name, "");
+    } else {
+        net(&s).live_changed(&id);
+    }
     Ok(Json(sw))
 }
 
@@ -481,6 +494,7 @@ async fn delete_switch(State(s): State<Shared>, me: Session, Path(id): Path<Stri
         }
         name
     };
+    net(&s).stop_live(&id);
     net(&s).save(&[File::Switches, File::Addresses]);
     net(&s).changed("switches");
     net(&s).log(&who(&me.user), "deleted switch", &name, "");
@@ -542,6 +556,79 @@ async fn patch_ports(State(s): State<Shared>, me: Session, Path(id): Path<String
     net(&s).changed("addresses");
     net(&s).changed("alerts");
     net(&s).log(&who(&me.user), "changed port", &sw.name, &detail);
+    net(&s).live_changed(&id);
+    Ok(Json(sw))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OnlineSet {
+    online: Option<bool>,
+    online_secs: Option<u32>,
+}
+
+async fn set_online(State(s): State<Shared>, me: Session, Path(id): Path<String>, Json(b): Json<OnlineSet>) -> ApiResult<StatusCode> {
+    editor(&me)?;
+    if b.online_secs.is_some_and(|x| !ONLINE_SECS.contains(&x)) {
+        return Err(bad("the read interval is 5, 10, 30 or 60 seconds"));
+    }
+    let (name, was, on, secs) = {
+        let mut st = net(&s).store.lock().unwrap();
+        let sw = st.switches.iter_mut().find(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
+        let on = b.online.unwrap_or(sw.online);
+        if on && sw.snmp.is_none() {
+            return Err(bad("the switch has no snmp agent"));
+        }
+        let was = (sw.online, sw.online_secs);
+        sw.online = on;
+        sw.online_secs = b.online_secs.unwrap_or(sw.online_secs);
+        (sw.name.clone(), was, on, sw.online_secs)
+    };
+    net(&s).save(&[File::Switches]);
+    net(&s).changed("switches");
+    let every = format!("every {secs} s");
+    if on && (!was.0 || was.1 != secs) {
+        net(&s).start_live(&id);
+    } else if !on && was.0 {
+        net(&s).stop_live(&id);
+    }
+    match (was.0, on) {
+        (false, true) => net(&s).log(&who(&me.user), "switch online", &name, &every),
+        (true, false) => net(&s).log(&who(&me.user), "switch offline", &name, ""),
+        _ if was.1 != secs => net(&s).log(&who(&me.user), "changed read interval", &name, &every),
+        _ => {}
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn switch_live(State(s): State<Shared>, _me: Session, Path(id): Path<String>) -> ApiResult<Json<super::live::Live>> {
+    net(&s).live_of(&id).map(Json).ok_or_else(|| status(404, "the switch is not online"))
+}
+
+#[derive(Deserialize)]
+struct Take {
+    ports: Option<Vec<u16>>,
+}
+
+async fn take_from_switch(State(s): State<Shared>, me: Session, Path(id): Path<String>, Json(b): Json<Take>) -> ApiResult<Json<Switch>> {
+    editor(&me)?;
+    let live = net(&s).live_of(&id).ok_or_else(|| status(404, "the switch is not online"))?;
+    if live.vlans.is_none() {
+        return Err(status(409, "the vlan setup of the switch is not known yet"));
+    }
+    let (sw, names) = {
+        let mut st = net(&s).store.lock().unwrap();
+        let sw = st.switches.iter_mut().find(|x| x.id == id).ok_or_else(|| not_found("switch"))?;
+        let names = super::live::take(sw, &live, b.ports.as_deref());
+        let sw = sw.clone();
+        net(&s).check_vlans(&mut st);
+        (sw, names)
+    };
+    net(&s).save(&[File::Switches, File::Alerts]);
+    net(&s).changed("switches");
+    net(&s).changed("alerts");
+    net(&s).log(&who(&me.user), "took config from switch", &sw.name, &names.join(", "));
+    net(&s).live_changed(&id);
     Ok(Json(sw))
 }
 
@@ -605,16 +692,25 @@ async fn update_snmp(State(s): State<Shared>, me: Session, Path(id): Path<String
 
 async fn delete_snmp(State(s): State<Shared>, me: Session, Path(id): Path<String>) -> ApiResult<StatusCode> {
     require(me.user.is_admin())?;
+    let mut offline = Vec::new();
     let name = {
         let mut st = net(&s).store.lock().unwrap();
         let i = st.snmp.iter().position(|x| x.id == id).ok_or_else(|| not_found("snmp agent"))?;
         for sw in st.switches.iter_mut().filter(|w| w.snmp.as_deref() == Some(&id)) {
             sw.snmp = None;
+            if sw.online {
+                sw.online = false;
+                offline.push(sw.id.clone());
+            }
         }
         st.snmp.remove(i).name
     };
+    for sw in offline {
+        net(&s).stop_live(&sw);
+    }
     net(&s).save(&[File::Snmp, File::Switches]);
     net(&s).changed("snmp");
+    net(&s).changed("switches");
     net(&s).log(&who(&me.user), "deleted snmp agent", &name, "");
     Ok(StatusCode::NO_CONTENT)
 }

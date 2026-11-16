@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Check, EthernetPort, Pencil, Plus, Save, Search, Trash2, X } from 'lucide-react';
-import { t, tc, tn } from '../i18n';
-import { api, can, useApp } from '../store';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Check, EthernetPort, Pencil, Plus, Save, Search, Trash2, TriangleAlert, X } from 'lucide-react';
+import { locale, t, tc, tn } from '../i18n';
+import { api, can, serverEvents, serverNow, useApp, useChanged } from '../store';
 import { navigate } from '../router';
 import { Field } from '../settings/ui';
 import { Segmented } from '../ui/fields';
@@ -12,11 +12,13 @@ import { PageHead } from './SidePage';
 import { byIp, validIp } from '../net/ip';
 import { KIND_ICON, displayName, fail, fmtSeen, useAllAddresses, useList, vlanById } from '../net/model';
 import { InlineText, vlanStyle } from '../net/parts';
-import type { Address, Network, PortMode, SnmpAgent, Switch, SwitchPort, Vlan } from '../net/types';
+import { fmtDuration } from '../ui/format';
+import type { Address, Live, LiveDiff, LivePort, Network, PortMode, SnmpAgent, Switch, SwitchPort, Vlan } from '../net/types';
 
 type PortSet = Partial<Record<keyof SwitchPort, unknown>>;
-/** Filtre : tous, un VLAN (`v:10`), les trunks, les libres. */
-type Filter = 'all' | 'trunk' | 'free' | `v:${number}`;
+/** Filtre : tous, un VLAN (`v:10`), les trunks, les libres ; en ligne : lien actif, sans lien, écarts, erreurs. */
+type Filter = 'all' | 'trunk' | 'free' | `v:${number}` | 'up' | 'down' | 'diff' | 'errors';
+const LIVE_FILTERS: Filter[] = ['up', 'down', 'diff', 'errors'];
 
 export function Switches({ id }: { id?: string }) {
   const user = useApp((s) => s.auth?.user);
@@ -108,6 +110,7 @@ export function Switches({ id }: { id?: string }) {
                 >
                   <EthernetPort size={15} />
                   <span className="grow">{s.name}</span>
+                  {s.online && <span className="nav-dot ok" title={t('Online')} />}
                   <span className="count">{s.ports.length}</span>
                 </div>
               ))}

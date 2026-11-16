@@ -51,6 +51,10 @@ const KNOWN: [RegExp, () => string][] = [
   [/^no such vlan/i, () => t('No such VLAN')],
   [/^no such snmp agent/i, () => t('No such SNMP agent')],
   [/^no answer/i, () => t('No answer')],
+  [/the switch has no snmp agent/i, () => t('The switch has no SNMP agent')],
+  [/the switch is not online/i, () => t('The switch is not online')],
+  [/the vlan setup of the switch is not known/i, () => t('The VLAN setup of the switch is not known yet')],
+  [/the read interval is/i, () => t('The read interval is 5, 10, 30 or 60 seconds')],
 ];
 
 /** Le message d'erreur à montrer ; le texte brut reste en infobulle. */

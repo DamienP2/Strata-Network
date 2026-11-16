@@ -34,6 +34,10 @@ function actionText(a: string): string {
     'labelled stream': () => t('labelled stream'),
     'browsed services': () => t('browsed services'),
     'marked alerts seen': () => t('marked alerts seen'),
+    'switch online': () => t('switch online'),
+    'switch offline': () => t('switch offline'),
+    'changed read interval': () => t('changed read interval'),
+    'took config from switch': () => t('took config from switch'),
   };
   return known[a.toLowerCase()]?.() ?? a;
 }

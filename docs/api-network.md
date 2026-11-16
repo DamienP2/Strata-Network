@@ -68,6 +68,29 @@ interface Switch {
   sfpNaming: string;
   snmp?: string;               // SnmpAgent id to read names, MAC table and LLDP from
   ports: SwitchPort[];         // always copper + sfp entries
+  online: boolean;             // read live through `snmp` (default false)
+  onlineSecs: 5 | 10 | 30 | 60;   // seconds between two live reads (default 10)
+}
+
+interface Live {               // an online switch, in memory only (not saved)
+  at: number;                  // last successful read (unix ms); 0 before the first one
+  error?: string;              // why the last read failed (the last values stay)
+  system?: { name: string; description: string; uptimeSecs: number; contact: string; location: string;
+             model: string; serial: string; firmware: string };   // read when going online, then every 5 min
+  ports: LivePort[];           // faceplate ports matched to an interface by name
+  vlans?: { n: number; pvid?: number; untagged: number[]; tagged: number[] }[];  // read every 5 min; absent until read
+  diffs: { n: number; field: 'mode' | 'vlan' | 'tagged' | 'off'; switch: string; inventory: string }[];
+                               // switch / inventory: short facts ("access VLAN 10", "trunk 30, 40", "disabled",
+                               // "VLAN 20", "no VLAN", "native VLAN 1"); only when `vlans` is known
+}
+
+interface LivePort {
+  n: number; ifIndex: number;
+  up: boolean; adminUp: boolean; speedMbps: number;
+  inBps: number; outBps: number;           // from the counter deltas between two reads (a counter that went back is skipped)
+  inErrors: number; outErrors: number;     // since the switch started
+  alias: string;                           // port description in the switch
+  inHistory: number[]; outHistory: number[];   // rates, oldest first, ≤ 60
 }
 
 interface SnmpAgent {          // read-only, SNMP v2c
@@ -122,6 +145,9 @@ interface HistoryEntry { at: number; user: string /* display name, or "scheduler
 | `GET /api/vlans` · `POST` · `PUT /{id}` · `DELETE /{id}` | `Vlan` | 409 "this vlan exists"; `changed: vlans` |
 | `GET /api/switches` · `POST` · `PUT /{id}` · `DELETE /{id}` | `Switch` | PUT keeps ports by `n` when the faceplate size changes; `changed: switches` |
 | `PATCH /api/switches/{id}/ports` | `{ports: number[], set: Partial<SwitchPort>}` → `Switch` | several ports at once |
+| `PATCH /api/switches/{id}/online` | `{online?, onlineSecs?}` → 204 | 400 "the switch has no snmp agent", 400 "the read interval is 5, 10, 30 or 60 seconds"; `changed: switches` |
+| `GET /api/switches/{id}/live` | → `Live` | 404 "the switch is not online" |
+| `POST /api/switches/{id}/take` | `{ports: number[] \| null}` (null = every port with a diff) → `Switch` | copies the switch's setup into the inventory; 404 "the switch is not online", 409 "the vlan setup of the switch is not known yet"; `changed: switches` |
 | `GET /api/snmp` · `POST` · `PUT /{id}` · `DELETE /{id}` | `SnmpAgent` | admin only for writes; `changed: snmp` |
 | `POST /api/snmp/{id}/poll` | → `SnmpAgent` | reads now (also every 5 min) |
 | `POST /api/snmp/test` | `{ip, port, community}` → `{name, description}` | 502 + message on failure |
@@ -138,6 +164,7 @@ interface HistoryEntry { at: number; user: string /* display name, or "scheduler
 WebSocket, besides `changed`:
 - `{"type":"scan","networkId","running":bool,"done","total","up"}` while a scan runs (at most 4 per second) and once at the end.
 - `{"type":"address","networkId","address":Address}` each time a scan examines a machine.
+- `{"type":"switchLive","id","live":Live}` after each live read of an online switch, and when its inventory changes.
 - The `hello` message carries `scans: {networkId: {done,total,up}}` for the scans running.
 
 ## Behaviour
@@ -153,6 +180,15 @@ WebSocket, besides `changed`:
   after 2 failures in a row, `watchUp` when it answers again; `up`/`rttMs` updated.
 - **Multicast**: passive only (SAP/SDP, PTP, routers' multicast tables by SNMP). `check` joins one group at most
   2 s and stops above `checkMaxMbps` (default 100).
-- **History**: every write route above adds an entry (`action`: "created network", "scanned", "changed port", …).
+- **Online switches** (read-only SNMP v2c): a task per online switch reads the interfaces' state and 64-bit counters
+  every `onlineSecs` (also at server start for the switches saved online), the identity (system group, ENTITY-MIB
+  chassis) and the VLAN setup (Q-BRIDGE-MIB) every 5 min. Interfaces are matched to the faceplate ports by name
+  (`GigabitEthernet1/0/12` = `Gi1/0/12`). The switch's setup of a port: off when administratively down, trunk when
+  it carries tagged VLANs (native = the PVID when it leaves untagged), else access on the PVID; it differs from the
+  inventory when the mode, the access VLAN or the tagged VLANs differ (a trunk's native VLAN only when the
+  inventory sets one). `take` copies mode, VLAN and tagged VLANs (a disabled port keeps its VLANs), and the port
+  description as label when the inventory has none. Removing the switch's agent puts it offline.
+- **History**: every write route above adds an entry (`action`: "created network", "scanned", "changed port", "switch online", "switch offline",
+  "changed read interval", "took config from switch", …).
 - Storage: `<data>/network/{networks,addresses,vlans,switches,snmp,multicast,alerts,history}.json`, atomic writes;
   history kept 1 year, alerts 500 newest.

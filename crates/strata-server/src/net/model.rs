@@ -216,6 +216,18 @@ pub struct Switch {
     pub snmp: Option<String>,
     #[serde(default)]
     pub ports: Vec<SwitchPort>,
+    /// Read live (state, counters, VLAN setup) through `snmp`.
+    #[serde(default)]
+    pub online: bool,
+    /// Seconds between two live reads: 5, 10, 30 or 60.
+    #[serde(default = "default_online_secs")]
+    pub online_secs: u32,
+}
+
+pub const ONLINE_SECS: [u32; 4] = [5, 10, 30, 60];
+
+fn default_online_secs() -> u32 {
+    10
 }
 
 fn default_copper() -> u16 {
@@ -233,6 +245,9 @@ impl Switch {
     pub fn normalize(&mut self) {
         self.copper = self.copper.min(96);
         self.sfp = self.sfp.min(48);
+        if !ONLINE_SECS.contains(&self.online_secs) {
+            self.online_secs = default_online_secs();
+        }
         let total = self.copper + self.sfp;
         let mut old: std::collections::HashMap<u16, SwitchPort> = self.ports.drain(..).map(|p| (p.n, p)).collect();
         for n in 1..=total {
@@ -361,6 +376,8 @@ mod tests {
             sfp_naming: default_sfp_naming(),
             snmp: None,
             ports: vec![SwitchPort { label: "PTZ".into(), ..SwitchPort::new(2) }],
+            online: false,
+            online_secs: 10,
         };
         s.normalize();
         assert_eq!(s.ports.len(), 6);

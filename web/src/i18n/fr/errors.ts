@@ -46,4 +46,8 @@ export const errors: Record<string, string> = {
   "No such VLAN": "VLAN introuvable",
   "No such SNMP agent": "Agent SNMP introuvable",
   "No answer": "Pas de réponse",
+  "The switch has no SNMP agent": "Le switch n’a pas d’agent SNMP",
+  "The switch is not online": "Le switch n’est pas en ligne",
+  "The VLAN setup of the switch is not known yet": "Les VLAN du switch ne sont pas encore lus",
+  "The read interval is 5, 10, 30 or 60 seconds": "La fréquence de lecture est de 5, 10, 30 ou 60 secondes",
 };
