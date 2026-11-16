@@ -10,6 +10,7 @@ import { confirmDialog } from '../ui/dialogs';
 import { openContextMenu, type MenuEntry } from '../ui/ContextMenu';
 import { Empty } from '../ui/Empty';
 import { fmtDate } from '../ui/format';
+import { useDisplayPref } from '../displayPrefs';
 import { intToIp, ipToInt, parseRange, validIp, type Range } from '../net/ip';
 import {
   KIND_ICON,
@@ -168,7 +169,7 @@ function NetworkView({ net, vlans, switches, editable, ip }: { net: Network; vla
   const [addrs, setAddrs] = useState<Map<number, Address> | null>(null);
   const [q, setQ] = useState('');
   const [chip, setChip] = useState<Chip>('all');
-  const [view, setView] = useState<'list' | 'plan'>('list');
+  const [view, setView] = useDisplayPref<'list' | 'tiles'>('scan.view', 'list');
   const [sel, setSel] = useState<number | null>(() => ipToInt(ip));
   const file = useRef<HTMLInputElement>(null);
   const range = useMemo(() => parseRange(net.range), [net.range]);
@@ -420,6 +421,8 @@ function NetworkView({ net, vlans, switches, editable, ip }: { net: Network; vla
             />
           </div>
 
+          {addrs && range && <Occupancy range={range} addrs={addrs} counts={counts} sel={sel} onSel={select} />}
+
           <div className="media-toolbar">
             <label className="search">
               <Search size={14} />
@@ -444,21 +447,21 @@ function NetworkView({ net, vlans, switches, editable, ip }: { net: Network; vla
             </div>
             <div className="spacer" />
             <Segmented
-              value={view}
+              value={view === 'tiles' ? 'tiles' : 'list'}
               onChange={setView}
               options={[
                 { value: 'list', label: <List size={14} />, title: t('List') },
-                { value: 'plan', label: <LayoutGrid size={14} />, title: t('Address plan') },
+                { value: 'tiles', label: <LayoutGrid size={14} />, title: t('Cards') },
               ]}
             />
           </div>
 
           {!addrs || !range ? (
             <div className="loading">{t('Loading…')}</div>
-          ) : view === 'list' ? (
-            <IpTable rows={rows} addrs={addrs} sel={sel} onSel={select} vlans={vlans} switches={switches} editable={editable} onLabel={(n, label) => void patch(intToIp(n), { label })} />
+          ) : view === 'tiles' ? (
+            <IpTiles rows={rows} addrs={addrs} gw={gw} sel={sel} onSel={select} />
           ) : (
-            <IpPlan range={range} addrs={addrs} gw={gw} sel={sel} onSel={select} counts={counts} />
+            <IpTable rows={rows} addrs={addrs} sel={sel} onSel={select} vlans={vlans} switches={switches} editable={editable} onLabel={(n, label) => void patch(intToIp(n), { label })} />
           )}
         </div>
       </main>
@@ -531,23 +534,21 @@ function IpTable({
     <div className="card-table fill" ref={box} onScroll={(e) => setTop(e.currentTarget.scrollTop)}>
       <table className="data-table ip-rows">
         <colgroup>
-          <col style={{ width: 30 }} />
-          <col style={{ width: 150 }} />
-          <col style={{ width: '15%' }} />
-          <col style={{ width: '16%' }} />
-          <col style={{ width: 150 }} />
-          <col style={{ width: '10%' }} />
+          <col style={{ width: 112 }} />
+          <col style={{ width: 190 }} />
+          <col style={{ width: '17%' }} />
+          <col style={{ width: '17%' }} />
+          <col style={{ width: '12%' }} />
           <col />
           <col style={{ width: 80 }} />
           <col style={{ width: 104 }} />
         </colgroup>
         <thead>
           <tr>
-            <th />
+            <th>{t('State')}</th>
             <th>{t('IP')}</th>
-            <th>{t('DNS name')}</th>
             <th>{t('Label')}</th>
-            <th>{t('MAC')}</th>
+            <th>{t('DNS name')}</th>
             <th>{t('Vendor')}</th>
             <th>{t('Open ports')}</th>
             <th className="num">{t('Latency')}</th>
@@ -570,7 +571,7 @@ function IpTable({
 function Pad({ h }: { h: number }) {
   return (
     <tr className="pad" aria-hidden>
-      <td colSpan={9} style={{ height: h }} />
+      <td colSpan={8} style={{ height: h }} />
     </tr>
   );
 }
@@ -596,23 +597,23 @@ function IpRow({
 }) {
   const ip = intToIp(n);
   const s = ipState(a);
-  const cls = `${s === 'free' || s === 'reserved' ? 'free' : s === 'offline' ? 'off' : ''} ${on ? 'sel' : ''}`;
+  const cls = `st-row ${STATE_CLASS[s]} ${on ? 'sel' : ''}`;
   const plug = a?.switch || switches?.some((sw) => sw.ports.some((p) => p.host === ip)) ? portOf(switches, a, ip) : null;
   const mm = plug ? vlanMismatch(vlans, plug.port, ip) : null;
   return (
     <tr className={cls} onClick={() => onSel(n)}>
       <td>
-        <StateDot s={s} isNew={a?.isNew} />
+        <StatePill s={s} />
       </td>
       <td>
         <span className="ip">{ip}</span>
+        {a?.isNew && <span className="new-badge">{t('New')}</span>}
         {mm && (
           <span className="badge warn" title={t('Outside the subnet of VLAN {id} ({subnet})', { id: mm.id, subnet: mm.subnet ?? '' })}>
             {t('VLAN')}
           </span>
         )}
       </td>
-      <td>{a?.name || '—'}</td>
       {on && editable ? (
         <td onClick={(e) => e.stopPropagation()}>
           <TextInput className="cell-edit" value={a?.label ?? ''} commitOnBlur onChange={(v) => v !== (a?.label ?? '') && onLabel(n, v)} autoFocus />
@@ -620,97 +621,174 @@ function IpRow({
       ) : (
         <LabelCell a={a} s={s} editable={editable} />
       )}
-      <td className="ip">{a?.mac ?? ''}</td>
+      <td>{a?.name ?? ''}</td>
       <td>{a?.vendor ?? ''}</td>
-      <td>{a && <PortChips a={a} />}</td>
-      <td className="num ip">{a?.up ? fmtMs(a.rttMs) : a?.lastSeen ? '—' : ''}</td>
-      <td>{fmtSeen(a?.lastSeen)}</td>
+      <td>{a && a.ports.length > 0 && <PortChips a={a} max={3} />}</td>
+      <td className="num ip">{a?.up ? fmtMs(a.rttMs) : ''}</td>
+      <td>{s === 'free' || s === 'reserved' ? '' : fmtSeen(a?.lastSeen)}</td>
     </tr>
   );
 }
 
 function LabelCell({ a, s, editable }: { a: Address | undefined; s: IpState; editable: boolean }) {
-  if (s === 'free') return <td className="lbl-empty">{t('Free')}</td>;
-  if (s === 'reserved') return <td className="lbl-empty">{a?.label ? t('Reserved · {label}', { label: a.label }) : t('Reserved')}</td>;
-  if (a?.label) return <td>{a.label}</td>;
-  return <td className="lbl-empty">{editable ? t('Add a label') : ''}</td>;
+  if (s === 'free') return <td />;
+  if (a?.label) return <td className="lbl">{a.label}</td>;
+  return <td className="lbl-empty">{editable && s !== 'reserved' ? t('Add a label') : ''}</td>;
 }
 
-function StateDot({ s, isNew }: { s: IpState; isNew?: boolean }) {
-  if (isNew) return <span className="nav-dot warn" title={t('New machine')} />;
-  if (s === 'used') return <span className="nav-dot ok" title={t('Used')} />;
-  if (s === 'offline') return <span className="nav-dot" title={t('Offline')} />;
-  return <span className="nav-dot free" title={s === 'reserved' ? t('Reserved') : t('Free')} />;
+const STATE_CLASS: Record<IpState, string> = { used: 'used', offline: 'off', reserved: 'resv', free: 'free' };
+
+/** The state written out: Used (green), Offline (orange), Reserved (blue ring), Free (grey ring). */
+function StatePill({ s }: { s: IpState }) {
+  return <span className={`st ${STATE_CLASS[s]}`}>{stateLabel(s)}</span>;
 }
 
-/* ---------- Plan d'adressage : 16 colonnes, un bloc par /24 ---------- */
+function stateLabel(s: IpState): string {
+  switch (s) {
+    case 'used':
+      return tc('state', 'Used');
+    case 'offline':
+      return tc('state', 'Offline');
+    case 'reserved':
+      return tc('state', 'Reserved');
+    default:
+      return tc('state', 'Free');
+  }
+}
 
-function IpPlan({
+/* ---------- Bandeau d'occupation : toute la plage d'un coup d'œil ---------- */
+
+function Occupancy({
   range,
   addrs,
-  gw,
+  counts,
   sel,
   onSel,
-  counts,
 }: {
   range: Range;
   addrs: Map<number, Address>;
-  gw: number | null;
+  counts: { used: number; offline: number; reserved: number; freeOnly: number };
   sel: number | null;
   onSel: (n: number) => void;
-  counts: { used: number; offline: number; reserved: number; freeOnly: number };
 }) {
   const blocks: number[] = [];
   for (let b = Math.floor(range.lo / 256); b <= Math.floor(range.hi / 256); b++) blocks.push(b);
-  const many = blocks.length > 1;
+  // Up to 4 × /24: one bar per address, a line per /24. Beyond: one cell per /24, shaded by how full it is.
+  const detailed = blocks.length <= 4;
   return (
-    <div className="set-card ip-plan-card">
-      <header>
-        <LayoutGrid size={16} />
-        <h2>{t('Address plan')}</h2>
-        <div className="spacer" />
-        <div className="sw-legend">
-          <span>
-            <span className="ipc used" />
-            {t('Used · {n}', { n: counts.used })}
-          </span>
-          <span>
-            <span className="ipc off" />
-            {t('Offline · {n}', { n: counts.offline })}
-          </span>
-          <span>
-            <span className="ipc resv" />
-            {t('Reserved · {n}', { n: counts.reserved })}
-          </span>
-          <span>
-            <span className="ipc" />
-            {t('Free · {n}', { n: counts.freeOnly })}
-          </span>
-        </div>
-      </header>
-      <div className="set-body">
-        {blocks.map((b) => (
-          <PlanBlock key={b} block={b} title={many} lazy={blocks.length > 4} range={range} addrs={addrs} gw={gw} sel={sel} onSel={onSel} />
-        ))}
+    <div className="occ-card">
+      <div className="occ-head">
+        <span>
+          <b>{counts.used}</b> {tn(counts.used, 'used IP', 'used IPs')}
+        </span>
+        <span>
+          <b>{counts.freeOnly}</b> {tn(counts.freeOnly, 'free IP', 'free IPs')}
+        </span>
+        <span>
+          <b>{counts.offline}</b> {t('offline')}
+        </span>
+        <span>
+          <b>{counts.reserved}</b> {tn(counts.reserved, 'reserved IP', 'reserved IPs')}
+        </span>
+        <span className="spacer" />
+        <StatePill s="used" />
+        <StatePill s="offline" />
+        <StatePill s="reserved" />
+        <StatePill s="free" />
       </div>
+      {detailed ? (
+        blocks.map((b) => (
+          <div key={b} className="occ-line">
+            {blocks.length > 1 && <span className="occ-label">{`${intToIp(b * 256)}/24`}</span>}
+            <div className="occ">
+              {Array.from({ length: 256 }, (_, i) => {
+                const n = b * 256 + i;
+                if (n < range.first || n > range.last) return <i key={i} className="na" />;
+                const a = addrs.get(n);
+                const st = ipState(a);
+                const name = a?.label || a?.name;
+                return (
+                  <i
+                    key={i}
+                    className={`${st === 'free' ? '' : STATE_CLASS[st]} ${n === sel ? 'sel' : ''}`}
+                    title={[intToIp(n), stateLabel(st), name].filter(Boolean).join(' · ')}
+                    onClick={() => onSel(n)}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        ))
+      ) : (
+        <div className="occ-blocks">
+          {blocks.map((b) => {
+            let used = 0;
+            let total = 0;
+            for (let n = Math.max(b * 256, range.first); n <= Math.min(b * 256 + 255, range.last); n++) {
+              total++;
+              const st = ipState(addrs.get(n));
+              if (st === 'used' || st === 'offline') used++;
+            }
+            const first = Math.max(b * 256, range.first);
+            return (
+              <i
+                key={b}
+                style={{ '--fill': `${total ? Math.round((used / total) * 100) : 0}%` } as React.CSSProperties}
+                title={`${intToIp(b * 256)}/24 · ${tn(used, '{n} used IP', '{n} used IPs')} · ${tn(total - used, '{n} free IP', '{n} free IPs')}`}
+                onClick={() => onSel(first)}
+              />
+            );
+          })}
+        </div>
+      )}
+      {detailed && (
+        <div className={`occ-ticks ${blocks.length > 1 ? 'indent' : ''}`}>
+          {Array.from({ length: 16 }, (_, i) => (
+            <span key={i}>.{i * 16}</span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function PlanBlock({
+/* ---------- Fiches : une fiche par adresse, les libres en petites cases ---------- */
+
+function IpTiles({ rows, addrs, gw, sel, onSel }: { rows: number[]; addrs: Map<number, Address>; gw: number | null; sel: number | null; onSel: (n: number) => void }) {
+  // Grouped by /24, each group drawn when it comes near the screen.
+  const groups = useMemo(() => {
+    const out: { block: number; list: number[] }[] = [];
+    for (const n of rows) {
+      const b = Math.floor(n / 256);
+      if (out.length === 0 || out[out.length - 1].block !== b) out.push({ block: b, list: [] });
+      out[out.length - 1].list.push(n);
+    }
+    return out;
+  }, [rows]);
+  if (rows.length === 0) return <div className="empty">{t('No match')}</div>;
+  return (
+    <div className="tiles-wrap">
+      {groups.map((g) => (
+        <TileGroup key={g.block} block={g.block} list={g.list} title={groups.length > 1} lazy={groups.length > 2} addrs={addrs} gw={gw} sel={sel} onSel={onSel} />
+      ))}
+    </div>
+  );
+}
+
+function TileGroup({
   block,
+  list,
   title,
   lazy,
-  range,
   addrs,
   gw,
   sel,
   onSel,
 }: {
   block: number;
+  list: number[];
   title: boolean;
   lazy: boolean;
-  range: Range;
   addrs: Map<number, Address>;
   gw: number | null;
   sel: number | null;
@@ -720,52 +798,59 @@ function PlanBlock({
   const [shown, setShown] = useState(!lazy);
   useEffect(() => {
     if (shown || !ref.current) return;
-    const io = new IntersectionObserver((e) => e.some((x) => x.isIntersecting) && setShown(true), { rootMargin: '600px' });
+    const io = new IntersectionObserver((e) => e.some((x) => x.isIntersecting) && setShown(true), { rootMargin: '800px' });
     io.observe(ref.current);
     return () => io.disconnect();
   }, [shown]);
-
-  const base = block * 256;
-  const cells = [];
-  if (shown)
-    for (let i = 0; i < 256; i++) {
-      const n = base + i;
-      const ip = intToIp(n);
-      const out = n < range.first || n > range.last;
-      const a = addrs.get(n);
-      const s = ipState(a);
-      const cls = out ? 'na' : s === 'used' ? 'used' : s === 'offline' ? 'off' : s === 'reserved' ? 'resv' : '';
-      const what = out ? (n === range.lo ? t('network') : n === range.hi ? t('broadcast') : t('outside the range')) : stateWord(s);
-      // The label, else the DNS name (its first part: "ptz-03" for "ptz-03.regie.lan").
-      const name = a?.label || (a?.name && !/^\d+(\.\d+){3}$/.test(a.name) ? a.name.split('.')[0] : '');
-      const full = [ip, what, a?.label, a?.name].filter(Boolean).join(' · ');
-      cells.push(
-        <button key={i} type="button" className={`ipc ${cls} ${name ? 'named' : ''} ${n === gw ? 'gw' : ''} ${n === sel ? 'sel' : ''}`} title={full} disabled={out} onClick={() => onSel(n)}>
-          <span className="ipc-n">.{i}</span>
-          {name && <span className="ipc-name">{name}</span>}
-        </button>,
-      );
-    }
+  // A tile chosen elsewhere (band, next free IP, alert): bring it into view.
+  useEffect(() => {
+    if (sel === null || Math.floor(sel / 256) !== block) return;
+    if (!shown) setShown(true);
+    requestAnimationFrame(() => ref.current?.querySelector('.tile.sel')?.scrollIntoView({ block: 'nearest' }));
+  }, [sel, block, shown]);
   return (
-    <div className="ip-plan-block" ref={ref}>
-      {title && <p className="ip-plan-title">{`${intToIp(base)}/24`}</p>}
-      {shown ? <div className="ip-plan">{cells}</div> : <div className="ip-plan-wait" />}
+    <div className="tiles-group" ref={ref}>
+      {title && <p className="ip-plan-title">{`${intToIp(block * 256)}/24`}</p>}
+      {shown ? (
+        <div className="tiles">
+          {list.map((n) => (
+            <Tile key={n} n={n} a={addrs.get(n)} gw={n === gw} on={n === sel} onSel={onSel} />
+          ))}
+        </div>
+      ) : (
+        <div style={{ height: Math.ceil(list.length / 6) * 50 }} />
+      )}
     </div>
   );
 }
 
-function stateWord(s: IpState): string {
-  switch (s) {
-    case 'used':
-      return t('used');
-    case 'offline':
-      return t('offline');
-    case 'reserved':
-      return t('reserved');
-    case 'free':
-      return t('free');
-  }
+function Tile({ n, a, gw, on, onSel }: { n: number; a: Address | undefined; gw: boolean; on: boolean; onSel: (n: number) => void }) {
+  const s = ipState(a);
+  const last = `.${n % 256}`;
+  if (s === 'free')
+    return (
+      <button type="button" className={`tile free ${on ? 'sel' : ''}`} title={intToIp(n)} onClick={() => onSel(n)}>
+        <span className="ip">{last}</span>
+        <StatePill s="free" />
+      </button>
+    );
+  const name = a?.label || a?.name || '—';
+  const sub = [a?.label ? a?.name : '', a?.vendor].filter(Boolean).join(' · ') || (s === 'offline' ? fmtSeen(a?.lastSeen) : '');
+  return (
+    <button type="button" className={`tile ${STATE_CLASS[s]} ${on ? 'sel' : ''}`} title={intToIp(n)} onClick={() => onSel(n)}>
+      <span className="tile-top">
+        <span className="ip">{last}</span>
+        {gw && <span className="badge">{t('gateway')}</span>}
+        {a?.isNew && <span className="new-badge">{t('New')}</span>}
+        <StatePill s={s} />
+      </span>
+      <span className="t-name">{name}</span>
+      {sub && <span className="t-sub">{sub}</span>}
+      {a && a.ports.length > 0 && <PortChips a={a} max={2} />}
+    </button>
+  );
 }
+
 
 /* ---------- Fiche de la machine ---------- */
 

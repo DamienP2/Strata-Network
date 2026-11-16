@@ -549,17 +549,6 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 /* IP libres et plan d'adressage */
 .nav-dot.free { background: none; box-shadow: inset 0 0 0 1.5px var(--line-2); }
 .data-table tbody tr.off td { color: var(--text-2); }
-.ip-plan { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 4px; }
-.ipc { position: relative; height: 30px; border-radius: 5px; border: 1px solid var(--line); background: none; color: var(--text-3); font: 600 11px var(--mono); display: grid; place-items: center; cursor: pointer; padding: 0; }
-.ipc:hover { border-color: var(--text-3); color: var(--text); }
-.ipc.used { background: color-mix(in srgb, var(--pvw) 28%, var(--panel-2)); border-color: var(--pvw); color: var(--text); }
-.ipc.off { background: color-mix(in srgb, var(--warn) 12%, var(--panel-2)); border-color: color-mix(in srgb, var(--warn) 70%, transparent); color: var(--text-2); }
-.ipc.resv { background: var(--accent-soft); border: 1.5px dashed var(--accent); color: var(--accent-2); }
-.ipc.gw { box-shadow: inset 0 0 0 2px var(--accent); }
-.ipc.na { opacity: 0.25; cursor: default; }
-.ipc.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
-.sw-legend .ipc { display: inline-block; width: 14px; height: 12px; border-radius: 3px; cursor: default; }
-.ip-plan-card > header .sw-legend { font-weight: 400; }
 
 /* Multicast */
 .spark { display: block; color: var(--accent); }
@@ -613,25 +602,6 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 .ip-rows .badge { margin-left: 6px; }
 .ip-plan-block + .ip-plan-block { margin-top: 14px; }
 .ip-plan-title { margin: 0 0 8px; font: 600 12px var(--mono); color: var(--text-2); }
-.ip-plan-wait { height: 930px; }
-/* Plan: the number, and under it the label or the DNS name */
-.ip-plan .ipc { height: 54px; display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 1px; padding: 0 4px; min-width: 0; }
-/* The last byte of the address, written ".23" so that it reads as an address: centred alone,
-   in the corner as a small tag when a name fills the cell. */
-.ipc-n { text-align: center; }
-.ipc.named { padding-top: 14px; }
-.ipc.named .ipc-n { position: absolute; top: 3px; left: 3px; padding: 0 4px; border-radius: 4px; font: 600 11px/14px var(--mono); color: var(--text-3); background: color-mix(in srgb, var(--bg) 55%, transparent); }
-.ipc.used.named .ipc-n { color: var(--pvw); }
-.ipc-name { font: 500 11px/1.2 Inter, system-ui, sans-serif; color: var(--text-2); text-align: center; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.ipc.used .ipc-name { color: var(--text); }
-.ipc.off.named .ipc-n { color: var(--warn); }
-.ipc.resv.named .ipc-n { color: var(--accent-2); }
-.ipc.resv .ipc-name { color: var(--accent-2); }
-/* A state dot in the corner of every cell of the plan: green answers, orange no longer answers, ring reserved. */
-.ip-plan .ipc::after { content: ''; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; }
-.ip-plan .ipc.used::after { background: var(--pvw); box-shadow: 0 0 6px var(--pvw); }
-.ip-plan .ipc.off::after { background: var(--warn); }
-.ip-plan .ipc.resv::after { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .kind.bad { background: var(--live-soft); color: #ff8aa0; }
 .kind.data { background: rgba(232, 121, 249, 0.15); color: #e879f9; }
 .data-table tbody tr.unseen td { color: var(--text); font-weight: 600; }
@@ -673,3 +643,71 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 :is(.panel, .data-table) :is(input, textarea):disabled { color: var(--text-2); cursor: default; }
 .data-table.plain tbody tr { cursor: default; }
 .data-table.plain tbody tr:hover td { background: none; }
+
+/* ── Scan : états, bandeau d'occupation, fiches ── */
+/* L'état en toutes lettres : vert répond, orange ne répond plus, anneau bleu réservée, anneau gris libre */
+.st { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.st::before { content: ''; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.st.used { color: var(--pvw); }
+.st.used::before { background: var(--pvw); box-shadow: 0 0 6px var(--pvw); }
+.st.off { color: var(--warn); }
+.st.off::before { background: var(--warn); }
+.st.resv { color: var(--accent-2); }
+.st.resv::before { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.st.free { color: var(--text-3); font-weight: 500; }
+.st.free::before { box-shadow: inset 0 0 0 1px var(--line-2); }
+/* « Nouveau » : un badge à part, jamais confondu avec l'état */
+.new-badge { display: inline-flex; align-items: center; font: 700 10.5px/1 Inter, system-ui, sans-serif; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 6px; border-radius: 4px; background: var(--accent); color: var(--on-accent); margin-left: 8px; vertical-align: 1px; }
+.port-more { font: 600 11px var(--mono); padding: 1px 6px; border-radius: 10px; border: 1px dashed var(--line-2); color: var(--text-3); white-space: nowrap; cursor: default; }
+/* Liste : liseré coloré à gauche, lignes libres hachurées */
+.ip-rows tr.st-row td:first-child { box-shadow: inset 3px 0 0 var(--bar, transparent); }
+.ip-rows tr.used { --bar: var(--pvw); }
+.ip-rows tr.off { --bar: var(--warn); }
+.ip-rows tr.resv { --bar: var(--accent); }
+.ip-rows tr.used td.lbl { font-weight: 600; }
+.ip-rows tr.off td { color: var(--text-2); }
+.ip-rows tr.resv td { background-color: color-mix(in srgb, var(--accent) 7%, transparent); }
+.ip-rows tr.resv td.lbl { color: var(--accent-2); }
+.ip-rows tr.free td { color: var(--text-3); background-image: repeating-linear-gradient(135deg, transparent 0 7px, color-mix(in srgb, var(--text-3) 7%, transparent) 7px 9px); }
+.ip-rows tr.free:hover td { background-color: var(--panel-2); }
+/* Bandeau d'occupation */
+.occ-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px 10px; display: flex; flex-direction: column; gap: 8px; flex: none; }
+.occ-head { display: flex; align-items: baseline; gap: 16px; font-size: 12px; color: var(--text-2); flex-wrap: wrap; }
+.occ-head b { font-size: 20px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.occ-head .spacer { flex: 1; }
+.occ-line { display: flex; align-items: center; gap: 10px; }
+.occ-label { flex: none; width: 104px; font: 600 11px var(--mono); color: var(--text-3); }
+.occ { flex: 1; display: grid; grid-template-columns: repeat(256, minmax(0, 1fr)); gap: 1px; height: 30px; }
+.occ > i { border-radius: 2px; background: var(--panel-3); cursor: pointer; }
+.occ > i.used { background: var(--pvw); }
+.occ > i.off { background: var(--warn); }
+.occ > i.resv { background: repeating-linear-gradient(180deg, var(--accent) 0 3px, transparent 3px 5px); }
+.occ > i.na { background: none; cursor: default; }
+.occ > i:hover:not(.na), .occ > i.sel { outline: 2px solid var(--text); outline-offset: 1px; position: relative; z-index: 1; }
+.occ-ticks { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); font: 11px var(--mono); color: var(--text-3); }
+.occ-ticks.indent { margin-left: 114px; }
+.occ-ticks span { border-left: 1px solid var(--line-2); padding-left: 3px; }
+.occ-blocks { display: grid; grid-template-columns: repeat(auto-fill, minmax(14px, 1fr)); gap: 2px; }
+.occ-blocks > i { height: 14px; border-radius: 2px; cursor: pointer; background: linear-gradient(0deg, var(--pvw) var(--fill), var(--panel-3) var(--fill)); }
+.occ-blocks > i:hover { outline: 2px solid var(--text); outline-offset: 1px; }
+/* Fiches : une par adresse ; les libres en petites cases pointillées */
+.tiles-group + .tiles-group { margin-top: 14px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 8px; align-items: start; }
+.tile { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 3px; min-height: 78px; padding: 8px 10px 8px 12px; border-radius: 9px; background: var(--panel); border: 1px solid var(--line); color: var(--text); text-align: left; font: inherit; cursor: pointer; overflow: hidden; transition: border-color 0.12s; }
+.tile::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--bar, transparent); }
+.tile:hover { border-color: var(--text-3); }
+.tile.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.tile.used { --bar: var(--pvw); }
+.tile.off { --bar: var(--warn); }
+.tile.resv { --bar: var(--accent); border-style: dashed; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+.tile-top { display: flex; align-items: center; gap: 6px; }
+.tile-top .ip { font-size: 12px; font-weight: 700; }
+.tile-top .st { margin-left: auto; font-size: 11px; }
+.tile-top .new-badge { margin-left: 0; }
+.tile .t-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile.resv .t-name { color: var(--accent-2); }
+.tile .t-sub { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .ports { margin-top: auto; padding-top: 3px; }
+.tile.free { min-height: 0; padding: 6px 10px; background: none; border-style: dashed; border-color: var(--line-2); flex-direction: row; align-items: center; }
+.tile.free .ip { color: var(--text-3); font-weight: 600; }
+.tile.free .st { margin-left: auto; }

@@ -19,12 +19,21 @@ export function VlanTag({ vlan, id, name }: { vlan?: Vlan; id?: number; name?: b
 export const vlanStyle = (v: Vlan | undefined): CSSProperties | undefined => (v ? ({ '--vlan': v.color } as CSSProperties) : undefined);
 
 /** Les ports ouverts d'une machine : lien pour les ports web. */
-export function PortChips({ a }: { a: Address }) {
+/** The open ports, web pages first; past `max`, a "+N" chip lists the others on hover. */
+export function PortChips({ a, max }: { a: Address; max?: number }) {
+  const sorted = [...a.ports].sort((x, y) => Number(!!y.web) - Number(!!x.web) || x.port - y.port);
+  const shown = max === undefined ? sorted : sorted.slice(0, max);
+  const rest = sorted.slice(shown.length);
   return (
     <div className="ports">
-      {a.ports.map((p) => (
+      {shown.map((p) => (
         <PortChip key={p.port} ip={a.ip} p={p} svc />
       ))}
+      {rest.length > 0 && (
+        <span className="port-more" title={rest.map((p) => `${p.port} ${p.web?.scheme ?? p.service ?? ''}`.trim()).join('\n')}>
+          +{rest.length}
+        </span>
+      )}
     </div>
   );
 }
