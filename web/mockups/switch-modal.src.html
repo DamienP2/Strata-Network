@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Strata Network — nouveau switch</title>
+<!--CSS-->
+<link rel="stylesheet" href="../src/styles.css" />
+<link rel="stylesheet" href="../src/styles-light.css" />
+<!--/CSS-->
+<style>
+/* ── Maquette seulement ── */
+[hidden] { display: none !important; }
+.mk-switch { position: fixed; left: 18px; bottom: 16px; z-index: 2000; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--line-2); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); font-size: 12px; color: var(--text-2); }
+.page-2 { height: 100%; display: grid; grid-template-columns: 240px minmax(0, 1fr); }
+
+/* ── La fenêtre ── */
+.modal.xwide { width: min(940px, 100%); }
+.how { display: flex; }
+.how .segmented button { padding: 5px 14px; font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; }
+.box { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.box-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.box-row .set-field { flex: 1; min-width: 140px; }
+.box-row .set-field.narrow { flex: none; width: 110px; }
+.or { font-size: 12px; color: var(--text-3); align-self: center; padding-bottom: 8px; }
+/* Résultat de la détection */
+.found { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 9px; background: color-mix(in srgb, var(--pvw) 9%, var(--panel)); border: 1px solid color-mix(in srgb, var(--pvw) 45%, transparent); }
+.found > svg { color: var(--pvw); flex: none; }
+.found b { display: block; font-size: 13px; }
+.found span { font-size: 12px; color: var(--text-2); }
+.found .badge { margin-left: auto; }
+/* Modèles */
+.tpl-search { display: flex; gap: 10px; align-items: center; }
+.tpls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-height: 230px; overflow: auto; padding-right: 2px; }
+.tpl { display: flex; flex-direction: column; gap: 6px; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; text-align: left; font: inherit; color: var(--text); }
+.tpl:hover { border-color: var(--text-3); }
+.tpl.on { border-color: var(--accent); background: var(--accent-soft); }
+.tpl b { font-size: 12.5px; }
+.tpl small { font-size: 11px; color: var(--text-3); }
+.tpl .mini { display: flex; gap: 1px; flex-wrap: wrap; }
+.tpl .mini i { width: 4px; height: 7px; border-radius: 1px; background: var(--line-2); }
+.tpl .mini i.s { width: 5px; background: var(--text-3); }
+.tpl .mini i.q { width: 8px; background: var(--accent); opacity: 0.7; }
+.tpl-brand { grid-column: 1 / -1; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); padding: 6px 2px 0; }
+.tpl.mine { border-style: dashed; }
+/* Groupes de ports */
+.groups { display: flex; flex-direction: column; gap: 6px; }
+.grp { display: grid; grid-template-columns: 22px 140px 92px minmax(0, 1fr) 110px 26px; gap: 8px; align-items: center; }
+.grp .num { text-align: right; font-family: var(--mono); }
+.grp .icon-btn { width: 26px; height: 26px; }
+.grp-head { display: grid; grid-template-columns: 22px 140px 92px minmax(0, 1fr) 110px 26px; gap: 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-2); }
+.grp .handle { color: var(--text-3); cursor: grab; display: grid; place-items: center; }
+.grp .range { font: 11.5px var(--mono); color: var(--text-3); white-space: nowrap; }
+.grp input, .grp .dd-btn { min-height: 0; height: 28px; }
+/* Aperçu de la façade */
+.preview { padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line-2); background: linear-gradient(180deg, #171a26, #10121a); overflow-x: auto; display: flex; gap: 14px; align-items: center; }
+.pv-block { display: grid; grid-template-rows: repeat(2, 16px); grid-auto-flow: column; gap: 3px 2px; }
+.pv-block i { width: 16px; height: 16px; border-radius: 2px; background: #1f2331; border: 1px solid #323750; }
+.pv-block.sfp i { width: 20px; height: 12px; margin-top: 2px; }
+.pv-block.qsfp i { width: 26px; height: 14px; border-color: #8fa3ff; }
+.pv-cap { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-3); }
+.hint-line { font-size: 11.5px; color: var(--text-3); }
+</style>
+</head>
+<body>
+<div id="root"><div class="app">
+<nav class="topbar">
+  <div class="brand"><span class="brand-lockup">
+    <svg class="brand-f-lead" viewBox="93.8 -0.2 52.3 52.95" width="23.7" height="24" aria-hidden="true"><path fill="currentColor" d="__F__"/></svg>
+    <span class="brand-name">Strata</span><span class="brand-module">Network</span>
+  </span></div>
+  <div class="tabs home-tabs">
+    <button><i data-i="radar" data-s="14"></i> <span class="tab-label">Scan</span></button>
+    <button class="on"><i data-i="ethernet-port" data-s="14"></i> <span class="tab-label">Switchs</span></button>
+    <button><i data-i="radio" data-s="14"></i> <span class="tab-label">Multicast</span></button>
+    <button><i data-i="list-tree" data-s="14"></i> <span class="tab-label">Topologie</span></button>
+    <button><i data-i="bell" data-s="14"></i> <span class="tab-label">Alertes</span></button>
+    <button><i data-i="server" data-s="14"></i> <span class="tab-label">Système</span></button>
+  </div>
+  <div class="spacer"></div>
+  <span class="ux1-pill"><span class="ux1-dot"></span>Connecté</span>
+</nav>
+<div class="content"><div class="page-2">
+  <aside class="lib-nav">
+    <div class="lib-nav-section"><span style="flex:1">Régie</span></div>
+    <div class="lib-nav-item on"><i data-i="ethernet-port" data-s="15"></i><span class="grow">SW-Régie-01</span><span class="count">52</span></div>
+  </aside>
+  <main class="library"></main>
+</div></div>
+
+<!-- ═════════ La fenêtre « Nouveau switch » ═════════ -->
+<div class="modal-back">
+  <form class="modal xwide" onsubmit="return false">
+    <header><h2>Nouveau switch</h2><button type="button" class="icon-btn ghost" title="Fermer"><i data-i="x" data-s="16"></i></button></header>
+
+    <div class="how"><div class="segmented" id="how">
+      <button type="button" class="on" data-v="snmp"><i data-i="radar" data-s="13"></i> Détecter par SNMP</button>
+      <button type="button" data-v="tpl"><i data-i="layout-grid" data-s="13"></i> Choisir un modèle</button>
+      <button type="button" data-v="free"><i data-i="pencil" data-s="13"></i> À la main</button>
+    </div></div>
+
+    <!-- 1. Détection SNMP -->
+    <div class="box" data-how="snmp">
+      <div class="box-row">
+        <label class="set-field"><span class="set-label">Adresse IP</span><input class="mono" value="10.99.0.21" /></label>
+        <label class="set-field narrow"><span class="set-label">Port</span><input class="mono" value="161" /></label>
+        <div class="set-field narrow"><span class="set-label">Version</span><div class="segmented"><button type="button">v2c</button><button type="button" class="on">v3</button></div></div>
+        <span class="or">ou</span>
+        <div class="set-field"><span class="set-label">Agent existant</span><button type="button" class="dd-btn" style="height:32px"><span class="dd-label">—</span><i data-i="chevron-down" data-s="12"></i></button></div>
+      </div>
+      <div class="box-row">
+        <label class="set-field"><span class="set-label">Utilisateur SNMP</span><input value="strata" /></label>
+        <div class="set-field" style="flex:none"><span class="set-label">Authentification</span><div class="segmented"><button type="button">MD5</button><button type="button" class="on">SHA</button><button type="button">SHA-256</button></div></div>
+        <label class="set-field"><span class="set-label">Mot de passe</span><input type="password" value="xxxxxxxxxx" /></label>
+        <div class="set-field" style="flex:none"><span class="set-label">Chiffrement</span><div class="segmented"><button type="button">Aucun</button><button type="button">DES</button><button type="button" class="on">AES-128</button></div></div>
+        <label class="set-field"><span class="set-label">Mot de passe</span><input type="password" value="xxxxxxxxxx" /></label>
+      </div>
+      <div class="box-row" style="align-items:center">
+        <button type="button" class="btn"><i data-i="radar" data-s="14"></i> Détecter</button>
+        <div class="found" style="flex:1">
+          <i data-i="circle-check" data-s="18"></i>
+          <div><b>sw-plateau-n9k-02 · Cisco Nexus C93240YC-FX2</b><span>NX-OS 10.2(5) · n° FDO24130XYZ · 60 ports Ethernet1/1 à 1/60 · modèle reconnu</span></div>
+          <span class="badge">l’agent SNMP sera créé</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Modèles -->
+    <div class="box" data-how="tpl" hidden>
+      <div class="tpl-search"><label class="search" style="width:280px"><i data-i="search" data-s="14"></i><input placeholder="Rechercher un modèle" value="" /></label><div class="spacer"></div><span class="hint-line">32 modèles · 2 à vous</span></div>
+      <div class="tpls" id="tpls"></div>
+    </div>
+
+    <!-- 3. Le switch (prérempli par la détection ou le modèle) -->
+    <div class="set-grid">
+      <label class="set-field"><span class="set-label">Nom</span><input value="SW-Plateau-N9K-02" /></label>
+      <label class="set-field"><span class="set-label">Modèle</span><input value="Cisco Nexus C93240YC-FX2" /></label>
+      <label class="set-field"><span class="set-label">Adresse IP</span><input class="mono" value="10.99.0.21" /></label>
+      <div class="set-field"><span class="set-label">Groupe</span><button type="button" class="dd-btn" style="height:32px"><span class="dd-label">Plateau B</span><i data-i="chevron-down" data-s="12"></i></button></div>
+      <div class="set-field"><span class="set-label">Agent SNMP</span><button type="button" class="dd-btn" style="height:32px"><span class="dd-label">Nouveau · 10.99.0.21 (v3)</span><i data-i="chevron-down" data-s="12"></i></button></div>
+      <label class="set-field"><span class="set-label">En ligne</span><span class="check" style="height:32px"><input type="checkbox" checked /> Lire en direct</span></label>
+    </div>
+
+    <div class="set-field">
+      <span class="set-label">Ports de la façade · 60</span>
+      <div class="groups">
+        <div class="grp-head"><span></span><span>Type</span><span>Nombre</span><span>Nommage</span><span>Ports</span><span></span></div>
+        <div class="grp"><span class="handle" title="Déplacer"><i data-i="grip-vertical" data-s="14"></i></span><button type="button" class="dd-btn"><span class="dd-label">SFP / SFP28</span><i data-i="chevron-down" data-s="12"></i></button><input class="num" value="48" /><input class="mono" value="Eth1/{n}" /><span class="range">Eth1/1 → 1/48</span><button type="button" class="icon-btn ghost" title="Retirer le groupe"><i data-i="x" data-s="13"></i></button></div>
+        <div class="grp"><span class="handle" title="Déplacer"><i data-i="grip-vertical" data-s="14"></i></span><button type="button" class="dd-btn"><span class="dd-label">QSFP / QSFP28</span><i data-i="chevron-down" data-s="12"></i></button><input class="num" value="12" /><input class="mono" value="Eth1/{n}" /><span class="range">Eth1/49 → 1/60</span><button type="button" class="icon-btn ghost" title="Retirer le groupe"><i data-i="x" data-s="13"></i></button></div>
+        <div><button type="button" class="btn small"><i data-i="plus" data-s="13"></i> Groupe de ports</button></div>
+      </div>
+    </div>
+
+    <div class="set-field">
+      <div class="pv-cap"><span class="set-label">Aperçu</span><span>48 SFP28 · 12 QSFP28</span></div>
+      <div class="preview" id="pv"></div>
+    </div>
+
+    <footer>
+      <label class="check" style="margin-right:auto"><input type="checkbox" /> Enregistrer comme modèle</label>
+      <button type="button" class="btn">Annuler</button>
+      <button type="submit" class="btn primary"><i data-i="plus" data-s="14"></i> Créer le switch</button>
+    </footer>
+  </form>
+</div>
+</div></div>
+
+<div class="mk-switch">Maquette
+  <div class="lang-switch theme-switch"><button class="on" data-theme-set="dark">Sombre</button><button data-theme-set="light">Clair</button></div>
+</div>
+
+<script>
+// Modèles fournis (et deux « à vous » en pointillés)
+const T = {
+  Cisco: [['Nexus C93240YC-FX2', [[48, 's'], [12, 'q']], 'Eth1/{n}', 1], ['Nexus C93180YC-FX', [[48, 's'], [6, 'q']], 'Eth1/{n}'], ['Nexus C9336C-FX2', [[36, 'q']], 'Eth1/{n}'], ['Catalyst C9300-48P', [[48, 'c'], [4, 's']], 'Gi1/0/{n} · Te1/1/{n}'], ['Catalyst C9300-24P', [[24, 'c'], [4, 's']], 'Gi1/0/{n} · Te1/1/{n}'], ['Catalyst 2960X-48FPS', [[48, 'c'], [4, 's']], 'Gi1/0/{n} · Gi1/0/{n}']],
+  Arista: [['7050SX3-48YC8', [[48, 's'], [8, 'q']], 'Ethernet{n}'], ['7280SR3-48YC8', [[48, 's'], [8, 'q']], 'Ethernet{n}']],
+  'Aruba / HPE': [['CX 6300M 48G', [[48, 'c'], [4, 's']], '1/1/{n}'], ['2930F-48G-4SFP+', [[48, 'c'], [4, 's']], '{n}']],
+  Juniper: [['EX3400-48T', [[48, 'c'], [4, 's'], [2, 'q']], 'ge-0/0/{n} · xe-0/2/{n}']],
+  Netgear: [['M4250-26G4F', [[24, 'c'], [2, 'c'], [4, 's']], '1/0/{n}'], ['M4350-48G4XF', [[48, 'c'], [4, 's']], '1/0/{n}']],
+  'À vous': [['Régie 48 + 4 (maison)', [[48, 'c'], [4, 's']], 'Gi1/0/{n}', 0, 1], ['Plateau 24 SFP', [[24, 's']], 'Te1/0/{n}', 0, 1]],
+};
+const mini = (groups) => groups.map(([n, k]) => Array.from({ length: Math.min(n, 48) }, () => `<i class="${k === 'c' ? '' : k}"></i>`).join('')).join('');
+document.getElementById('tpls').innerHTML = Object.entries(T).map(([brand, list]) => `<div class="tpl-brand">${brand}</div>` + list.map(([name, g, naming, on, mine]) =>
+  `<button type="button" class="tpl ${on ? 'on' : ''} ${mine ? 'mine' : ''}"><b>${name}</b><small>${g.map(([n, k]) => n + ' ' + (k === 'c' ? 'RJ45' : k === 's' ? 'SFP' : 'QSFP')).join(' + ')} · ${naming}</small><span class="mini">${mini(g)}</span></button>`).join('')).join('');
+// Aperçu : 48 SFP en blocs de 12, puis 12 QSFP
+const pv = document.getElementById('pv');
+let h = '';
+for (let b = 0; b < 4; b++) h += `<div class="pv-block sfp">${'<i></i>'.repeat(12)}</div>`;
+h += `<div class="pv-block qsfp">${'<i></i>'.repeat(12)}</div>`;
+pv.innerHTML = h;
+// Maquette : façon de commencer et thème
+document.querySelectorAll('#how button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('#how button').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('[data-how]').forEach((x) => (x.hidden = x.dataset.how !== b.dataset.v));
+}));
+document.querySelectorAll('[data-theme-set]').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.themeSet === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
+  document.querySelectorAll('[data-theme-set]').forEach((x) => x.classList.toggle('on', x === b));
+}));
+</script>
+</body>
+</html>
