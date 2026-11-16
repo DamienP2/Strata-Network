@@ -1,12 +1,13 @@
 """Builds the mockups: inlines lucide icons (and, with --standalone, the CSS and fonts).
 
-python3 web/mockups/build.py <lucide-static icons dir> [--standalone OUT]
+python3 web/mockups/build.py <lucide-static icons dir> [--src NAME] [--standalone OUT]
 """
 import base64, pathlib, re, sys
 
 here = pathlib.Path(__file__).parent
 icons = pathlib.Path(sys.argv[1])
-src = (here / "network.src.html").read_text()
+name = sys.argv[sys.argv.index("--src") + 1] if "--src" in sys.argv else "network"
+src = (here / f"{name}.src.html").read_text()
 design = (here.parent.parent / "docs" / "design.md").read_text()
 F = re.search(r"const F = '([^']+)'", design).group(1)
 
@@ -19,7 +20,7 @@ def icon(m):
             f'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{body}</svg>')
 
 out = re.sub(r'<i data-i="([\w-]+)" data-s="(\d+)"( data-c="([\w-]+)")?></i>', icon, src).replace("__F__", F)
-(here / "network.html").write_text(out)
+(here / f"{name}.html").write_text(out)
 
 if "--standalone" in sys.argv:
     css = ""

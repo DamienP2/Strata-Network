@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Strata Network — Scan, 3 propositions</title>
+<!--CSS-->
+<link rel="stylesheet" href="../src/styles.css" />
+<link rel="stylesheet" href="../src/styles-light.css" />
+<!--/CSS-->
+<style>
+/* ── Maquette seulement : choisir la variante ── */
+[hidden] { display: none !important; }
+.mk-switch { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 400; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--line-2); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); font-size: 12px; color: var(--text-2); }
+.mk-switch .segmented button { padding: 4px 12px; font-size: 12px; }
+.variant { display: none; height: 100%; }
+.variant.on { display: block; }
+
+/* ── Commun aux trois propositions ── */
+:root { --st-used: var(--pvw); --st-off: var(--warn); --st-resv: var(--accent); --st-free: var(--line-2); }
+.scan-page { height: 100%; display: grid; grid-template-columns: 240px minmax(0, 1fr); }
+.scan-page.with-panel { grid-template-columns: 240px minmax(0, 1fr) 340px; }
+.scan-page > .library { min-width: 0; }
+.ip { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+/* L'état, en toutes lettres */
+.st { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.st::before { content: ''; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.st.used { color: var(--pvw); } .st.used::before { background: var(--pvw); box-shadow: 0 0 6px var(--pvw); }
+.st.off { color: var(--warn); } .st.off::before { background: var(--warn); }
+.st.resv { color: var(--accent-2); } .st.resv::before { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.st.free { color: var(--text-3); font-weight: 500; } .st.free::before { box-shadow: inset 0 0 0 1px var(--line-2); }
+/* « Nouveau » : un badge à part, jamais confondu avec l'état */
+.new-badge { display: inline-flex; align-items: center; font: 700 10.5px/1 Inter, system-ui, sans-serif; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 6px; border-radius: 4px; background: var(--accent); color: var(--on-accent); margin-left: 8px; vertical-align: 1px; }
+/* Ports : 3 au plus, puis « +N » (la liste complète au survol et dans la fiche) */
+.ports { display: flex; gap: 4px; flex-wrap: nowrap; align-items: center; }
+.port-more { font: 600 11px var(--mono); padding: 1px 6px; border-radius: 10px; border: 1px dashed var(--line-2); color: var(--text-3); white-space: nowrap; }
+
+/* ── A. Liste à états ── */
+.st-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; table-layout: fixed; }
+.st-table th { position: sticky; top: 0; z-index: 1; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; padding: 9px 10px; background: var(--panel-2); border-bottom: 1px solid var(--line); }
+.st-table td { padding: 0 10px; height: 32px; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-table tbody tr { cursor: pointer; }
+.st-table tbody tr:hover td { background-color: var(--panel-2); }
+.st-table td:first-child { box-shadow: inset 3px 0 0 var(--bar, transparent); }
+.st-table tr.used { --bar: var(--pvw); }
+.st-table tr.off { --bar: var(--warn); }
+.st-table tr.resv { --bar: var(--accent); }
+.st-table tr.used td.lbl { font-weight: 600; }
+.st-table tr.off td { color: var(--text-2); }
+.st-table tr.resv td { background-color: color-mix(in srgb, var(--accent) 7%, transparent); }
+.st-table tr.resv td.lbl { color: var(--accent-2); }
+/* Libre : la ligne est « vide » (hachures légères), on voit les trous d'un coup d'œil */
+.st-table tr.free td { height: 26px; color: var(--text-3); background-image: repeating-linear-gradient(135deg, transparent 0 7px, color-mix(in srgb, var(--text-3) 7%, transparent) 7px 9px); }
+.st-table tr.sel td { background-color: var(--accent-soft) !important; }
+.st-table .muted2 { color: var(--text-3); }
+.card-table { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+
+/* ── B. Bandeau d'occupation ── */
+.occ-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 10px; display: flex; flex-direction: column; gap: 8px; }
+.occ-head { display: flex; align-items: baseline; gap: 14px; font-size: 12px; color: var(--text-2); }
+.occ-head b { font-size: 20px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.occ-head .sep { flex: 1; }
+.occ { display: grid; grid-template-columns: repeat(256, minmax(0, 1fr)); gap: 1px; height: 34px; }
+.occ > i { border-radius: 2px; background: var(--panel-3); cursor: pointer; }
+.occ > i.used { background: var(--pvw); }
+.occ > i.off { background: var(--warn); }
+.occ > i.resv { background: repeating-linear-gradient(180deg, var(--accent) 0 3px, transparent 3px 5px); }
+.occ > i.na { background: none; }
+.occ > i:hover { outline: 2px solid var(--text); outline-offset: 1px; position: relative; z-index: 1; }
+.occ-ticks { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); font: 11px var(--mono); color: var(--text-3); }
+.occ-ticks span { border-left: 1px solid var(--line-2); padding-left: 3px; }
+.occ-bar { display: flex; height: 6px; border-radius: 4px; overflow: hidden; background: var(--panel-3); }
+.occ-bar > span { display: block; }
+
+/* ── C. Grille de fiches ── */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 8px; align-items: start; }
+.tile { position: relative; display: flex; flex-direction: column; gap: 3px; min-height: 78px; padding: 8px 10px 8px 12px; border-radius: 9px; background: var(--panel); border: 1px solid var(--line); cursor: pointer; overflow: hidden; transition: border-color 0.12s; }
+.tile::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--bar, transparent); }
+.tile:hover { border-color: var(--text-3); }
+.tile.used { --bar: var(--pvw); }
+.tile.off { --bar: var(--warn); }
+.tile.resv { --bar: var(--accent); border-style: dashed; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+.tile-top { display: flex; align-items: center; gap: 6px; }
+.tile-top .ip { font-size: 12px; font-weight: 700; }
+.tile-top .st { margin-left: auto; font-size: 11px; }
+.tile .t-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .t-sub { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .ports { margin-top: auto; padding-top: 3px; }
+/* Libre : petite case pointillée, sans contenu */
+.tile.free { min-height: 0; padding: 6px 10px; background: none; border-style: dashed; border-color: var(--line-2); flex-direction: row; align-items: center; }
+.tile.free .ip { color: var(--text-3); font-weight: 600; }
+.tile.free .st { margin-left: auto; }
+.tiles-sep { grid-column: 1 / -1; font: 600 11px var(--mono); color: var(--text-3); padding: 6px 2px 0; }
+</style>
+</head>
+<body>
+<div id="root"><div class="app">
+<nav class="topbar">
+  <div class="brand"><span class="brand-lockup">
+    <svg class="brand-f-lead" viewBox="93.8 -0.2 52.3 52.95" width="23.7" height="24" aria-hidden="true"><path fill="currentColor" d="M145.93,22.93v-10.33h-35.97c2.12,2.08,7.43,7.77,7.92,13.05-.05-.42-.28-1.57-1.25-3.27-.98-1.72-2.72-4-5.8-6.66-.03-.03-.06-.05-.09-.08-1.11-.96-2.39-1.98-3.87-3.03C98.07,5.95,95.14,2.38,94.38.01c0,0-2.69,9.66,4.5,17.36,0,0-1.74-.36-3.41-1.02,0,0,2.98,7.41,11.12,11.33,0,0-2.11.07-3.92-.14,0,0,1.93,2.92,7.66,5.88v8.46c0,.57-.46,1.04-1.04,1.04h-3.97v7.83h24.8v-7.85h-3.76c-.57,0-1.04-.46-1.04-1.04v-3.41c1.19.21,4.51,1.95,5.96,3.12,3.92,3.17,8.11,8.05,8.11,8.05l1.83,1.13s-5.07-6.05-8.33-9.3c-2.27-2.27-6.1-6.1-6.1-6.1l-.2-.22h9.57v-7.19h-10.82v-7.51l9.78-.04c.58,0,1.04.46,1.04,1.04v1.5h9.8-.03Z"/></svg>
+    <span class="brand-name">Strata</span><span class="brand-module">Network</span>
+  </span></div>
+  <div class="tabs home-tabs">
+    <button class="on"><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.07 4.93A10 10 0 0 0 6.99 3.34" /><path d="M4 6h.01" /><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35" /><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67" /><path d="M12 18h.01" /><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67" /><circle cx="12" cy="12" r="2" /><path d="m13.41 10.59 5.66-5.66" /></svg> <span class="tab-label">Scan</span></button>
+    <button><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" /><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" /><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" /></svg> <span class="tab-label">VLAN</span></button>
+    <button><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 20 3-3h2a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2l3 3z" /><path d="M6 8v1" /><path d="M10 8v1" /><path d="M14 8v1" /><path d="M18 8v1" /></svg> <span class="tab-label">Switchs</span></button>
+    <button><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9" /><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5" /><circle cx="12" cy="12" r="2" /><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5" /><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19" /></svg> <span class="tab-label">Multicast</span></button>
+    <button><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12h-8" /><path d="M21 6H8" /><path d="M21 18h-8" /><path d="M3 6v4c0 1.1.9 2 2 2h3" /><path d="M3 10v6c0 1.1.9 2 2 2h3" /></svg> <span class="tab-label">Topologie</span></button>
+    <button><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></svg> <span class="tab-label">Alertes</span></button>
+    <button><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2" ry="2" /><rect width="20" height="8" x="2" y="14" rx="2" ry="2" /><line x1="6" x2="6.01" y1="6" y2="6" /><line x1="6" x2="6.01" y1="18" y2="18" /></svg> <span class="tab-label">Système</span></button>
+  </div>
+  <div class="spacer"></div>
+  <span class="ux1-pill"><span class="ux1-dot"></span>Connecté</span>
+  <button class="learn-help" title="Aide"><svg xmlns="http://www.w3.org/2000/svg" class="" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><path d="M12 17h.01" /></svg></button>
+  <div class="ux1-user"><button class="ux1-user-btn named"><span class="avatar">D</span><span class="user-name">Damien</span><svg xmlns="http://www.w3.org/2000/svg" class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></button></div>
+</nav>
+<div class="content">
+
+<!-- La colonne de gauche et l'en-tête sont les mêmes pour les trois propositions. -->
+<template id="nav"><aside class="lib-nav">
+  <div class="lib-nav-section"><span style="flex:1">Réseaux</span><button class="icon-btn ghost" title="Nouveau réseau" style="width:22px;height:22px"><svg xmlns="http://www.w3.org/2000/svg" class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14" /><path d="M12 5v14" /></svg></button></div>
+  <div class="lib-nav-item on"><svg xmlns="http://www.w3.org/2000/svg" class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1" /><rect x="2" y="16" width="6" height="6" rx="1" /><rect x="9" y="2" width="6" height="6" rx="1" /><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" /><path d="M12 12V8" /></svg><span class="grow">LAN Régie</span><span class="count">46</span></div>
+  <div class="lib-nav-item"><svg xmlns="http://www.w3.org/2000/svg" class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1" /><rect x="2" y="16" width="6" height="6" rx="1" /><rect x="9" y="2" width="6" height="6" rx="1" /><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" /><path d="M12 12V8" /></svg><span class="grow">Vidéo ST 2110</span><span class="count">212</span></div>
+  <div class="lib-nav-item"><svg xmlns="http://www.w3.org/2000/svg" class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1" /><rect x="2" y="16" width="6" height="6" rx="1" /><rect x="9" y="2" width="6" height="6" rx="1" /><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" /><path d="M12 12V8" /></svg><span class="grow">Audio Dante</span><span class="count">46</span></div>
+  <div class="lib-nav-item"><svg xmlns="http://www.w3.org/2000/svg" class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1" /><rect x="2" y="16" width="6" height="6" rx="1" /><rect x="9" y="2" width="6" height="6" rx="1" /><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" /><path d="M12 12V8" /></svg><span class="grow">Bureautique</span><span class="count">64</span></div>
+</aside></template>
+<template id="head"><div class="settings-head">
+  <div><h1>LAN Régie</h1><p class="muted"><span class="ip">10.10.0.0/24</span> · passerelle <span class="ip">10.10.0.1</span> · scanné il y a 4 min · planifié toutes les heures</p></div>
+  <div class="spacer"></div>
+  <button class="btn"><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.1 2.182a10 10 0 0 1 3.8 0" /><path d="M13.9 21.818a10 10 0 0 1-3.8 0" /><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7" /><path d="M2.182 13.9a10 10 0 0 1 0-3.8" /><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69" /><path d="M21.818 10.1a10 10 0 0 1 0 3.8" /><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69" /><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7" /></svg> Prochaine IP libre</button>
+  <button class="btn primary"><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.07 4.93A10 10 0 0 0 6.99 3.34" /><path d="M4 6h.01" /><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35" /><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67" /><path d="M12 18h.01" /><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67" /><circle cx="12" cy="12" r="2" /><path d="m13.41 10.59 5.66-5.66" /></svg> Scanner</button>
+  <button class="icon-btn" title="Plus"><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></svg></button>
+</div></template>
+<template id="chips"><div class="asr-chips">
+  <button class="asr-chip on">Toutes <span class="asr-chip-n">254</span></button>
+  <button class="asr-chip">Utilisées <span class="asr-chip-n" data-n="used"></span></button>
+  <button class="asr-chip">Libres <span class="asr-chip-n" data-n="free"></span></button>
+  <button class="asr-chip">Hors ligne <span class="asr-chip-n" data-n="off"></span></button>
+  <button class="asr-chip">Réservées <span class="asr-chip-n" data-n="resv"></span></button>
+  <button class="asr-chip">Nouvelles <span class="asr-chip-n" data-n="new"></span></button>
+</div></template>
+
+<!-- ═══════ A. Liste à états ═══════ -->
+<section class="variant on" data-v="A">
+<div class="scan-page with-panel">
+  <div data-slot="nav"></div>
+  <main class="library"><div class="library-inner wide">
+    <div data-slot="head"></div>
+    <div class="media-toolbar"><label class="search" style="width:240px"><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg><input placeholder="IP, nom, MAC" /></label><div data-slot="chips"></div></div>
+    <div class="card-table">
+      <table class="st-table">
+        <colgroup><col style="width:118px"><col style="width:118px"><col style="width:18%"><col style="width:17%"><col style="width:15%"><col style="width:24%"><col style="width:70px"></colgroup>
+        <thead><tr><th>État</th><th>IP</th><th>Libellé</th><th>Nom DNS</th><th>Constructeur</th><th>Ports</th><th style="text-align:right">Latence</th></tr></thead>
+        <tbody id="rowsA"></tbody>
+      </table>
+    </div>
+  </div></main>
+  <aside class="panel right">
+    <div class="host-head" style="display:flex;align-items:center;gap:10px;padding:16px 14px 12px;border-bottom:1px solid var(--line)">
+      <span class="host-ico" style="width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:var(--panel-3);color:var(--accent-2)"><svg xmlns="http://www.w3.org/2000/svg" class="" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.75 12h3.632a1 1 0 0 1 .894 1.447l-2.034 4.069a1 1 0 0 1-1.708.134l-2.124-2.97" /><path d="M17.106 9.053a1 1 0 0 1 .447 1.341l-3.106 6.211a1 1 0 0 1-1.342.447L3.61 12.3a2.92 2.92 0 0 1-1.3-3.91L3.69 5.6a2.92 2.92 0 0 1 3.92-1.3z" /><path d="M2 19h3.76a2 2 0 0 0 1.8-1.1L9 15" /><path d="M2 21v-4" /><path d="M7 9h.01" /></svg></span>
+      <div style="flex:1;min-width:0"><b style="display:block;font-size:14px">Caméra PTZ 3</b><span class="ip" style="font-size:12px;color:var(--text-3)">10.10.0.23 · ptz-03.regie.lan</span></div>
+      <button class="icon-btn ghost" title="Fermer"><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg></button>
+    </div>
+    <section class="insp-section"><header><span>État</span></header><div class="insp-body">
+      <div class="prop-row"><span class="prop-label">Réseau</span><span class="st used">Répond · 1,1 ms</span></div>
+      <div class="prop-row"><span class="prop-label">Vue depuis</span><span style="font-size:12px">12 oct. 2026</span></div>
+    </div></section>
+    <section class="insp-section"><header><span>Ports ouverts · 6</span></header><div class="insp-body" id="allPorts"></div></section>
+  </aside>
+</div>
+</section>
+
+<!-- ═══════ B. Bandeau d'occupation + liste ═══════ -->
+<section class="variant" data-v="B">
+<div class="scan-page">
+  <div data-slot="nav"></div>
+  <main class="library"><div class="library-inner wide">
+    <div data-slot="head"></div>
+    <div class="occ-card">
+      <div class="occ-head"><span><b data-n="used"></b> utilisées</span><span><b data-n="free"></b> libres</span><span><b data-n="off"></b> hors ligne</span><span><b data-n="resv"></b> réservées</span><span class="sep"></span>
+        <span class="st used">Utilisée</span><span class="st off">Hors ligne</span><span class="st resv">Réservée</span><span class="st free">Libre</span></div>
+      <div class="occ" id="occ"></div>
+      <div class="occ-ticks" id="ticks"></div>
+    </div>
+    <div class="media-toolbar"><label class="search" style="width:240px"><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg><input placeholder="IP, nom, MAC" /></label><div data-slot="chips"></div></div>
+    <div class="card-table">
+      <table class="st-table">
+        <colgroup><col style="width:118px"><col style="width:118px"><col style="width:18%"><col style="width:17%"><col style="width:13%"><col style="width:26%"><col style="width:70px"><col style="width:96px"></colgroup>
+        <thead><tr><th>État</th><th>IP</th><th>Libellé</th><th>Nom DNS</th><th>Constructeur</th><th>Ports</th><th style="text-align:right">Latence</th><th>Vu</th></tr></thead>
+        <tbody id="rowsB"></tbody>
+      </table>
+    </div>
+  </div></main>
+</div>
+</section>
+
+<!-- ═══════ C. Grille de fiches ═══════ -->
+<section class="variant" data-v="C">
+<div class="scan-page">
+  <div data-slot="nav"></div>
+  <main class="library"><div class="library-inner wide">
+    <div data-slot="head"></div>
+    <div class="media-toolbar"><label class="search" style="width:240px"><svg xmlns="http://www.w3.org/2000/svg" class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg><input placeholder="IP, nom, MAC" /></label><div data-slot="chips"></div></div>
+    <div class="tiles" id="tiles"></div>
+  </div></main>
+</div>
+</section>
+
+</div></div></div>
+
+<div class="mk-switch">Proposition
+  <div class="segmented" id="mk"><button class="on" data-v="A">A · Liste à états</button><button data-v="B">B · Bandeau + liste</button><button data-v="C">C · Fiches</button></div>
+  <div class="lang-switch theme-switch"><button class="on" data-theme-set="dark">Sombre</button><button data-theme-set="light">Clair</button></div>
+</div>
+
+<script>
+// ── Données fictives d'un /24 (même jeu pour les trois propositions) ──
+const EXT = '<svg xmlns="http://www.w3.org/2000/svg" class="" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>';
+const KNOWN = {
+  1: ['Passerelle', 'gw.regie.lan', 'Fortinet', [[443, 'https', 1], [22, 'ssh']], 0.4],
+  2: ['Cœur de réseau', 'sw-core-01.lan', 'Cisco', [[443, 'https', 1], [22, 'ssh'], [161, 'snmp']], 0.5],
+  10: ['SW-Régie-01', 'sw-regie-01.lan', 'Cisco', [[443, 'https', 1], [22, 'ssh']], 0.6],
+  21: ['Caméra PTZ 1', 'ptz-01.regie.lan', 'Panasonic', [[80, 'http', 1], [554, 'rtsp']], 1.0],
+  22: ['Caméra PTZ 2', 'ptz-02.regie.lan', 'Panasonic', [[80, 'http', 1], [554, 'rtsp']], 1.2],
+  23: ['Caméra PTZ 3', 'ptz-03.regie.lan', 'Panasonic', [[80, 'http', 1], [443, 'https', 1], [554, 'rtsp'], [8080, 'http', 1], [22, 'ssh'], [5900, 'vnc']], 1.1],
+  24: ['', 'ptz-04.regie.lan', 'Panasonic', [[80, 'http', 1], [554, 'rtsp']], 1.0],
+  30: ['Mélangeur', 'atem-1.regie.lan', 'Blackmagic Design', [[9910, 'atem']], 0.8],
+  31: ['Videohub', 'vhub-1.regie.lan', 'Blackmagic Design', [[9990, 'videohub']], 0.9],
+  40: ['Intercom', '', 'Riedel', [[8080, 'http', 1]], 2.3],
+  77: ['', 'desktop-k3l9.lan', 'HP', [[445, 'smb'], [3389, 'rdp'], [135, 'msrpc'], [139, 'netbios']], 3.8],
+  120: ['vMix Prod', 'vmix-01.regie.lan', 'Dell', [[8088, 'http', 1], [3389, 'rdp'], [5960, 'ndi'], [445, 'smb']], 0.9],
+  121: ['vMix Secours', 'vmix-02.regie.lan', 'Dell', [[8088, 'http', 1], [3389, 'rdp']], 1.0],
+  200: ['NAS Prod', 'nas-prod.regie.lan', 'Synology', [[5001, 'https', 1], [445, 'smb'], [22, 'ssh'], [873, 'rsync'], [80, 'http', 1]], 0.7],
+};
+const OFF = { 41: ['Écran Studio B', 'mon-b.regie.lan', 'LG', 'il y a 3 j'], 201: ['NAS Sauvegarde', 'nas-backup.regie.lan', 'Synology', 'il y a 6 h'], 88: ['', 'laptop-jp.lan', 'Apple', 'il y a 2 j'] };
+const RESV = { 25: 'PTZ 5 (retour SAV)', 26: 'PTZ 6 (commande)', 50: 'Console Studio C', 250: 'Réserve DHCP' };
+const NEW = new Set([77, 152]);
+// Machines anonymes en plus (postes) pour remplir un peu
+for (const n of [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 140, 141, 142, 143, 150, 151, 152, 153, 154, 155, 156, 160, 161, 162, 163, 164, 165, 166, 167, 168])
+  KNOWN[n] = ['', `poste-${n}.regie.lan`, n % 3 ? 'Dell' : 'HP', n % 2 ? [[3389, 'rdp'], [445, 'smb']] : [[445, 'smb']], 1 + (n % 7) / 3];
+
+const rows = [];
+for (let n = 1; n <= 254; n++) {
+  const ip = '10.10.0.' + n;
+  if (KNOWN[n]) { const [label, dns, vendor, ports, rtt] = KNOWN[n]; rows.push({ n, ip, st: 'used', label, dns, vendor, ports, rtt, seen: 'à l’instant', isNew: NEW.has(n) }); }
+  else if (OFF[n]) { const [label, dns, vendor, seen] = OFF[n]; rows.push({ n, ip, st: 'off', label, dns, vendor, ports: [], seen }); }
+  else if (RESV[n]) rows.push({ n, ip, st: 'resv', label: RESV[n], dns: '', vendor: '', ports: [], seen: 'jamais' });
+  else rows.push({ n, ip, st: 'free', label: '', dns: '', vendor: '', ports: [], seen: 'jamais' });
+}
+const count = (s) => rows.filter((r) => r.st === s).length;
+const N = { used: count('used'), off: count('off'), resv: count('resv'), free: count('free'), new: NEW.size };
+const ST = { used: 'Utilisée', off: 'Hors ligne', resv: 'Réservée', free: 'Libre' };
+
+const chip = ([p, svc, web]) => web ? `<a class="port-chip" href="#">${p} <span class="svc">${svc}</span> ${EXT}</a>` : `<span class="port-chip">${p} <span class="svc">${svc}</span></span>`;
+const ports = (list, max = 3) => {
+  // Les pages web d'abord, puis les autres ; « +N » pour le reste (liste complète au survol)
+  const sorted = [...list].sort((a, b) => (b[2] ? 1 : 0) - (a[2] ? 1 : 0) || a[0] - b[0]);
+  const shown = sorted.slice(0, max).map(chip).join('');
+  const rest = sorted.slice(max);
+  return `<div class="ports">${shown}${rest.length ? `<span class="port-more" title="${rest.map((p) => p[0] + ' ' + p[1]).join('\n')}">+${rest.length}</span>` : ''}</div>`;
+};
+const label = (r) => r.label || (r.st === 'free' ? '' : '<span class="muted2">—</span>');
+const row = (r, withSeen) => `<tr class="${r.st}${r.n === 23 ? ' sel' : ''}">
+  <td><span class="st ${r.st}">${ST[r.st]}</span></td>
+  <td class="ip">${r.ip}${r.isNew ? '<span class="new-badge">Nouveau</span>' : ''}</td>
+  <td class="lbl">${label(r)}</td>
+  <td>${r.dns || ''}</td>
+  <td>${r.vendor || ''}</td>
+  <td>${r.ports.length ? ports(r.ports) : r.st === 'off' ? `<span class="muted2">vue ${r.seen}</span>` : ''}</td>
+  <td class="ip" style="text-align:right">${r.rtt ? r.rtt.toFixed(1).replace('.', ',') + ' ms' : ''}</td>
+  ${withSeen ? `<td>${r.st === 'used' ? 'à l’instant' : r.st === 'off' ? r.seen : ''}</td>` : ''}
+</tr>`;
+
+// Commun : colonne de gauche, en-tête, puces
+document.querySelectorAll('[data-slot]').forEach((s) => (s.outerHTML = document.getElementById(s.dataset.slot).innerHTML));
+document.querySelectorAll('[data-n]').forEach((e) => (e.textContent = N[e.dataset.n]));
+
+// A
+document.getElementById('rowsA').innerHTML = rows.map((r) => row(r, false)).join('');
+document.getElementById('allPorts').innerHTML = KNOWN[23][3].map((p) => `<div class="svc-row" style="display:flex;align-items:center;gap:8px;min-height:28px;font-size:12px">${chip(p)}<span style="color:var(--text-2)">${p[2] ? '« AW-UE150 Web Setting »' : ''}</span></div>`).join('');
+// B
+document.getElementById('rowsB').innerHTML = rows.map((r) => row(r, true)).join('');
+const occ = document.getElementById('occ');
+occ.innerHTML = Array.from({ length: 256 }, (_, n) => {
+  const r = rows[n - 1];
+  return n === 0 || n === 255 ? '<i class="na"></i>' : `<i class="${r.st === 'free' ? '' : r.st}" title="${r.ip} · ${ST[r.st]}${r.label ? ' · ' + r.label : ''}"></i>`;
+}).join('');
+document.getElementById('ticks').innerHTML = Array.from({ length: 16 }, (_, i) => `<span>.${i * 16}</span>`).join('');
+// C
+document.getElementById('tiles').innerHTML = rows.map((r) => r.st === 'free'
+  ? `<div class="tile free"><span class="ip">.${r.n}</span><span class="st free">Libre</span></div>`
+  : `<div class="tile ${r.st}"><div class="tile-top"><span class="ip">.${r.n}</span>${r.isNew ? '<span class="new-badge" style="margin-left:0">Nouveau</span>' : ''}<span class="st ${r.st}">${ST[r.st]}</span></div>
+     <div class="t-name">${r.label || r.dns || '—'}</div><div class="t-sub">${[r.label ? r.dns : '', r.vendor].filter(Boolean).join(' · ') || (r.st === 'off' ? 'vue ' + r.seen : '')}</div>
+     ${r.ports.length ? ports(r.ports, 2) : ''}</div>`).join('');
+
+// Maquette : variantes et thème
+document.querySelectorAll('#mk button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('#mk button').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.variant').forEach((v) => v.classList.toggle('on', v.dataset.v === b.dataset.v));
+}));
+document.querySelectorAll('[data-theme-set]').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.themeSet === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
+  document.querySelectorAll('[data-theme-set]').forEach((x) => x.classList.toggle('on', x === b));
+}));
+</script>
+</body>
+</html>
