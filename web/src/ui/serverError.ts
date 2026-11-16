@@ -53,6 +53,8 @@ const KNOWN: [RegExp, () => string][] = [
   [/the range ends before it starts/i, () => t('The range ends before it starts')],
   [/the prefix is a number from 0 to 32/i, () => t('The prefix is a number from 0 to 32')],
   [/a switch has at least one port/i, () => t('A switch has at least one port')],
+  [/a switch has at most (\d+) ports/i, () => t('A switch has at most {n} ports', { n: 256 })],
+  [/^no such switch model/i, () => t('No such switch model')],
   [/the colour is written #rrggbb/i, () => t('The color is written #rrggbb')],
   [/the port of this stream is not known/i, () => t('The port of this stream is not known')],
   [/no network interface/i, () => t('No network interface')],

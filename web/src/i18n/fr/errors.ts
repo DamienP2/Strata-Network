@@ -38,6 +38,8 @@ export const errors: Record<string, string> = {
   "The range ends before it starts": "La plage finit avant de commencer",
   "The prefix is a number from 0 to 32": "Le préfixe est un nombre de 0 à 32",
   "A switch has at least one port": "Un switch a au moins un port",
+  "A switch has at most {n} ports": "Un switch a au plus {n} ports",
+  "No such switch model": "Modèle de switch introuvable",
   "The color is written #rrggbb": "La couleur s’écrit #rrggbb",
   "The port of this stream is not known": "Le port de ce flux n’est pas connu",
   "No network interface": "Aucune interface réseau",

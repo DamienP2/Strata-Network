@@ -192,6 +192,78 @@ impl SwitchPort {
     }
 }
 
+/// The kind of cage of a group of ports.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PortKind {
+    #[default]
+    Rj45,
+    Sfp,
+    Qsfp,
+}
+
+/// Ports of the same kind, side by side on the faceplate.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortGroup {
+    pub kind: PortKind,
+    pub count: u16,
+    /// Interface name with `{n}` for the number: "Gi1/0/{n}".
+    #[serde(default)]
+    pub naming: String,
+    /// First number; absent = after the previous group when it has the same naming, else 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<u16>,
+}
+
+impl PortGroup {
+    pub fn new(kind: PortKind, count: u16, naming: &str) -> PortGroup {
+        PortGroup { kind, count, naming: naming.into(), start: None }
+    }
+}
+
+/// Most ports on one switch.
+pub const MAX_PORTS: u16 = 256;
+
+/// The first number of each group (see `PortGroup::start`).
+pub fn group_starts(groups: &[PortGroup]) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::with_capacity(groups.len());
+    for (i, g) in groups.iter().enumerate() {
+        let start = match (g.start, i) {
+            (Some(s), _) => s as u32,
+            (None, 0) => 1,
+            (None, _) if groups[i - 1].naming == g.naming => out[i - 1] + groups[i - 1].count as u32,
+            _ => 1,
+        };
+        out.push(start);
+    }
+    out
+}
+
+/// The interface names of the faceplate, in order, with the kind of each port.
+pub fn port_names(groups: &[PortGroup]) -> Vec<(String, PortKind)> {
+    let starts = group_starts(groups);
+    let mut out = Vec::new();
+    for (g, start) in groups.iter().zip(starts) {
+        let naming = if g.naming.contains("{n}") { g.naming.clone() } else { format!("{}{{n}}", g.naming) };
+        for i in 0..g.count as u32 {
+            out.push((naming.replace("{n}", &(start + i).to_string()), g.kind));
+        }
+    }
+    out
+}
+
+/// Groups as they are kept: trimmed naming, no empty group, at most `MAX_PORTS` in all.
+pub fn clean_groups(groups: &mut Vec<PortGroup>) {
+    let mut left = MAX_PORTS;
+    groups.retain_mut(|g| {
+        g.naming = g.naming.trim().to_string();
+        g.count = g.count.min(left);
+        left -= g.count;
+        g.count > 0
+    });
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Switch {
@@ -204,14 +276,18 @@ pub struct Switch {
     pub ip: Option<Ipv4Addr>,
     #[serde(default)]
     pub group: String,
-    #[serde(default = "default_copper")]
-    pub copper: u16,
+    /// The faceplate: groups of ports, in order.
     #[serde(default)]
-    pub sfp: u16,
-    #[serde(default = "default_naming")]
-    pub naming: String,
-    #[serde(default = "default_sfp_naming")]
-    pub sfp_naming: String,
+    pub groups: Vec<PortGroup>,
+    /// Before port groups: copper ports, then SFP ports (read to migrate, never written).
+    #[serde(default, skip_serializing)]
+    pub copper: Option<u16>,
+    #[serde(default, skip_serializing)]
+    pub sfp: Option<u16>,
+    #[serde(default, skip_serializing)]
+    pub naming: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub sfp_naming: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snmp: Option<String>,
     #[serde(default)]
@@ -230,45 +306,62 @@ fn default_online_secs() -> u32 {
     10
 }
 
-fn default_copper() -> u16 {
-    24
-}
-fn default_naming() -> String {
-    "Gi1/0/{n}".into()
-}
-fn default_sfp_naming() -> String {
-    "Te1/1/{n}".into()
-}
-
 impl Switch {
+    /// A switch saved before port groups: copper then SFP become two groups. True when it changed.
+    pub fn migrate(&mut self) -> bool {
+        let legacy = self.copper.is_some() || self.sfp.is_some() || self.naming.is_some() || self.sfp_naming.is_some();
+        let (copper, sfp, naming, sfp_naming) = (self.copper.take(), self.sfp.take(), self.naming.take(), self.sfp_naming.take());
+        if !self.groups.is_empty() || !legacy {
+            return false;
+        }
+        self.groups = vec![
+            PortGroup::new(PortKind::Rj45, copper.unwrap_or(24), naming.as_deref().unwrap_or("Gi1/0/{n}")),
+            PortGroup::new(PortKind::Sfp, sfp.unwrap_or(0), sfp_naming.as_deref().unwrap_or("Te1/1/{n}")),
+        ];
+        self.groups.retain(|g| g.count > 0);
+        true
+    }
+
+    pub fn port_count(&self) -> u16 {
+        self.groups.iter().map(|g| g.count).sum()
+    }
+
     /// Makes `ports` match the faceplate: one entry per port, in order, names filled.
     pub fn normalize(&mut self) {
-        self.copper = self.copper.min(96);
-        self.sfp = self.sfp.min(48);
+        self.migrate();
+        clean_groups(&mut self.groups);
         if !ONLINE_SECS.contains(&self.online_secs) {
             self.online_secs = default_online_secs();
         }
-        let total = self.copper + self.sfp;
+        let names = port_names(&self.groups);
         let mut old: std::collections::HashMap<u16, SwitchPort> = self.ports.drain(..).map(|p| (p.n, p)).collect();
-        for n in 1..=total {
+        for (i, (name, _)) in names.into_iter().enumerate() {
+            let n = i as u16 + 1;
             let mut p = old.remove(&n).unwrap_or_else(|| SwitchPort::new(n));
             if !matches!(p.mode.as_str(), "access" | "trunk" | "off") {
                 p.mode = access();
             }
             p.tagged.sort_unstable();
             p.tagged.dedup();
-            p.name = self.port_name(n);
+            p.name = name;
             self.ports.push(p);
         }
     }
+}
 
-    pub fn port_name(&self, n: u16) -> String {
-        if n <= self.copper {
-            self.naming.replace("{n}", &n.to_string())
-        } else {
-            self.sfp_naming.replace("{n}", &(n - self.copper).to_string())
-        }
-    }
+/// A faceplate to start from: built in, or saved by a user.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchModel {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub brand: String,
+    pub model: String,
+    pub groups: Vec<PortGroup>,
+    /// Texts that recognise it in sysDescr or the ENTITY model (built-in models only).
+    #[serde(default, skip_serializing)]
+    pub matches: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -365,31 +458,93 @@ pub const KINDS: &[&str] = &[
 mod tests {
     use super::*;
 
-    #[test]
-    fn faceplate_keeps_ports_and_names_them() {
-        let mut s = Switch {
+    fn switch(groups: Vec<PortGroup>) -> Switch {
+        Switch {
             id: "a".into(),
             name: "sw".into(),
             model: String::new(),
             ip: None,
             group: String::new(),
-            copper: 4,
-            sfp: 2,
-            naming: default_naming(),
-            sfp_naming: default_sfp_naming(),
+            groups,
+            copper: None,
+            sfp: None,
+            naming: None,
+            sfp_naming: None,
             snmp: None,
-            ports: vec![SwitchPort { label: "PTZ".into(), ..SwitchPort::new(2) }],
+            ports: vec![],
             online: false,
             online_secs: 10,
-        };
+        }
+    }
+
+    #[test]
+    fn faceplate_keeps_ports_and_names_them() {
+        let mut s = switch(vec![PortGroup::new(PortKind::Rj45, 4, "Gi1/0/{n}"), PortGroup::new(PortKind::Sfp, 2, "Te1/1/{n}")]);
+        s.ports = vec![SwitchPort { label: "PTZ".into(), ..SwitchPort::new(2) }];
         s.normalize();
         assert_eq!(s.ports.len(), 6);
         assert_eq!(s.ports[1].label, "PTZ");
         assert_eq!(s.ports[0].name, "Gi1/0/1");
         assert_eq!(s.ports[5].name, "Te1/1/2");
-        s.copper = 2;
+        s.groups[0].count = 2;
         s.normalize();
         assert_eq!(s.ports.len(), 4);
+        assert_eq!(s.ports[3].name, "Te1/1/2");
+    }
+
+    #[test]
+    fn old_switches_become_groups() {
+        let mut s: Switch = serde_json::from_value(serde_json::json!({
+            "id": "b", "name": "sw", "copper": 24, "sfp": 4, "naming": "Gi1/0/{n}", "sfpNaming": "Te1/1/{n}",
+            "ports": [{"n": 3, "label": "PTZ", "mode": "access", "vlan": 20}, {"n": 26, "label": "uplink", "mode": "trunk", "tagged": [10, 20]}]
+        }))
+        .unwrap();
+        assert!(s.migrate());
+        assert_eq!(s.groups, vec![PortGroup::new(PortKind::Rj45, 24, "Gi1/0/{n}"), PortGroup::new(PortKind::Sfp, 4, "Te1/1/{n}")]);
+        assert!(!s.migrate());
+        s.normalize();
+        assert_eq!(s.ports.len(), 28);
+        assert_eq!((s.ports[2].label.as_str(), s.ports[2].vlan), ("PTZ", Some(20)));
+        assert_eq!((s.ports[25].name.as_str(), s.ports[25].label.as_str()), ("Te1/1/2", "uplink"));
+        // Written without the old fields; an empty SFP group is skipped.
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v.get("copper").is_none() && v.get("sfpNaming").is_none());
+        let mut c: Switch = serde_json::from_value(serde_json::json!({"name": "c", "copper": 8, "sfp": 0})).unwrap();
+        c.normalize();
+        assert_eq!(c.groups, vec![PortGroup::new(PortKind::Rj45, 8, "Gi1/0/{n}")]);
+    }
+
+    #[test]
+    fn group_numbers_follow_on_with_the_same_naming() {
+        let nexus = [PortGroup::new(PortKind::Sfp, 48, "Eth1/{n}"), PortGroup::new(PortKind::Qsfp, 12, "Eth1/{n}")];
+        let names = port_names(&nexus);
+        assert_eq!(names.len(), 60);
+        assert_eq!(names[47], ("Eth1/48".to_string(), PortKind::Sfp));
+        assert_eq!(names[48], ("Eth1/49".to_string(), PortKind::Qsfp));
+        assert_eq!(names[59].0, "Eth1/60");
+        let catalyst = [PortGroup::new(PortKind::Rj45, 48, "Gi1/0/{n}"), PortGroup::new(PortKind::Sfp, 4, "Te1/1/{n}")];
+        assert_eq!(port_names(&catalyst)[48].0, "Te1/1/1");
+        let juniper = [PortGroup { start: Some(0), ..PortGroup::new(PortKind::Rj45, 48, "ge-0/0/{n}") }, PortGroup { start: Some(0), ..PortGroup::new(PortKind::Sfp, 4, "xe-0/2/{n}") }];
+        let j = port_names(&juniper);
+        assert_eq!((j[0].0.as_str(), j[47].0.as_str(), j[48].0.as_str()), ("ge-0/0/0", "ge-0/0/47", "xe-0/2/0"));
+        // A naming without {n} gets the number at the end; three groups with one naming count on.
+        let netgear = [PortGroup::new(PortKind::Rj45, 24, "1/0/"), PortGroup::new(PortKind::Rj45, 2, "1/0/"), PortGroup::new(PortKind::Sfp, 4, "1/0/")];
+        assert_eq!(port_names(&netgear)[29].0, "1/0/30");
+        assert_eq!(group_starts(&[PortGroup::new(PortKind::Rj45, 4, "a{n}"), PortGroup { start: Some(9), ..PortGroup::new(PortKind::Sfp, 2, "a{n}") }, PortGroup::new(PortKind::Sfp, 2, "a{n}")]), vec![1, 9, 11]);
+    }
+
+    #[test]
+    fn at_most_256_ports() {
+        let mut s = switch(vec![PortGroup::new(PortKind::Rj45, 200, "{n}"), PortGroup::new(PortKind::Sfp, 100, "{n}"), PortGroup::new(PortKind::Qsfp, 4, "{n}")]);
+        s.normalize();
+        assert_eq!(s.port_count(), 256);
+        assert_eq!(s.groups.len(), 2);
+        assert_eq!(s.groups[1].count, 56);
+        assert_eq!(s.ports.len(), 256);
+        assert_eq!(s.ports[255].name, "256");
+        let mut big = switch(vec![PortGroup::new(PortKind::Sfp, 256, "Eth1/{n}")]);
+        big.normalize();
+        assert_eq!(big.ports.len(), 256);
     }
 
     #[test]

@@ -32,11 +32,14 @@ pub fn router() -> Router<Shared> {
         .route("/api/vlans", get(vlans).post(create_vlan))
         .route("/api/vlans/{id}", put(update_vlan).delete(delete_vlan))
         .route("/api/switches", get(switches).post(create_switch))
+        .route("/api/switches/detect", post(detect_switch))
         .route("/api/switches/{id}", put(update_switch).delete(delete_switch))
         .route("/api/switches/{id}/ports", patch(patch_ports))
         .route("/api/switches/{id}/online", patch(set_online))
         .route("/api/switches/{id}/live", get(switch_live))
         .route("/api/switches/{id}/take", post(take_from_switch))
+        .route("/api/switch-models", get(switch_models).post(create_switch_model))
+        .route("/api/switch-models/{id}", axum::routing::delete(delete_switch_model))
         .route("/api/snmp", get(snmp_list).post(create_snmp))
         .route("/api/snmp/test", post(snmp_test))
         .route("/api/snmp/{id}", put(update_snmp).delete(delete_snmp))
@@ -423,10 +426,20 @@ fn check_switch(sw: &mut Switch) -> ApiResult<()> {
     if sw.name.is_empty() {
         return Err(bad("the name cannot be empty"));
     }
-    if sw.copper + sw.sfp == 0 {
+    sw.migrate();
+    check_groups(&sw.groups)?;
+    sw.normalize();
+    Ok(())
+}
+
+fn check_groups(groups: &[PortGroup]) -> ApiResult<()> {
+    let total: u32 = groups.iter().map(|g| g.count as u32).sum();
+    if total == 0 {
         return Err(bad("a switch has at least one port"));
     }
-    sw.normalize();
+    if total > MAX_PORTS as u32 {
+        return Err(bad(format!("a switch has at most {MAX_PORTS} ports")));
+    }
     Ok(())
 }
 
@@ -631,6 +644,116 @@ async fn take_from_switch(State(s): State<Shared>, me: Session, Path(id): Path<S
     net(&s).log(&who(&me.user), "took config from switch", &sw.name, &names.join(", "));
     net(&s).live_changed(&id);
     Ok(Json(sw))
+}
+
+// ── Switch models and detection ──
+
+async fn switch_models(State(s): State<Shared>, _me: Session) -> Json<Value> {
+    let mine = net(&s).store.lock().unwrap().templates.clone();
+    Json(json!({"builtin": super::models::catalog(), "mine": mine}))
+}
+
+async fn create_switch_model(State(s): State<Shared>, me: Session, Json(mut m): Json<SwitchModel>) -> ApiResult<Json<SwitchModel>> {
+    editor(&me)?;
+    m.brand = m.brand.trim().to_string();
+    m.model = m.model.trim().to_string();
+    if m.model.is_empty() {
+        return Err(bad("the name cannot be empty"));
+    }
+    check_groups(&m.groups)?;
+    clean_groups(&mut m.groups);
+    m.id = new_id();
+    m.matches.clear();
+    net(&s).store.lock().unwrap().templates.push(m.clone());
+    net(&s).save(&[File::Templates]);
+    net(&s).changed("switchModels");
+    net(&s).log(&who(&me.user), "saved switch model", &m.model, "");
+    Ok(Json(m))
+}
+
+async fn delete_switch_model(State(s): State<Shared>, me: Session, Path(id): Path<String>) -> ApiResult<StatusCode> {
+    editor(&me)?;
+    let name = {
+        let mut st = net(&s).store.lock().unwrap();
+        let i = st.templates.iter().position(|x| x.id == id).ok_or_else(|| not_found("switch model"))?;
+        st.templates.remove(i).model
+    };
+    net(&s).save(&[File::Templates]);
+    net(&s).changed("switchModels");
+    net(&s).log(&who(&me.user), "deleted switch model", &name, "");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Detect {
+    #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
+    ip: Option<Ipv4Addr>,
+    #[serde(default)]
+    port: u16,
+    #[serde(default)]
+    community: String,
+    #[serde(default)]
+    v3: Option<strata_net::snmpv3::V3>,
+}
+
+/// Reads a switch (identity and interfaces) and proposes its faceplate.
+async fn detect_switch(State(s): State<Shared>, me: Session, Json(d): Json<Detect>) -> ApiResult<Json<Value>> {
+    editor(&me)?;
+    let a = {
+        let st = net(&s).store.lock().unwrap();
+        let known = d.agent_id.as_deref().map(|id| st.snmp.iter().find(|x| x.id == id).ok_or_else(|| not_found("snmp agent"))).transpose()?;
+        match (d.ip, known) {
+            // An agent chosen as it is.
+            (None, Some(k)) => k.clone(),
+            (None, None) => return Err(bad("not an ipv4 address")),
+            (Some(ip), known) => {
+                let mut a = SnmpAgent {
+                    id: String::new(),
+                    name: String::new(),
+                    ip,
+                    port: if d.port == 0 { 161 } else { d.port },
+                    community: d.community,
+                    v3: d.v3,
+                    read_arp: false,
+                    read_multicast: false,
+                    read_switch: false,
+                    last_poll: None,
+                };
+                unmask(&mut a, known);
+                a
+            }
+        }
+    };
+    if let Some(v3) = &a.v3 {
+        v3.check().map_err(bad)?;
+    }
+    let sess = super::snmp::session(&a).await.map_err(|e| status(502, e))?;
+    let system = strata_net::snmp::system(&sess).await.map_err(|e| status(502, e.to_string()))?;
+    let ifs = strata_net::snmp::if_list(&sess).await.map_err(|e| status(502, e.to_string()))?;
+    let ports = super::models::physical(&ifs);
+    let matched = super::models::recognise(&[&system.model, &system.description]);
+    let (model, groups) = match matched {
+        Some(m) => (format!("{} {}", m.brand, m.model), m.groups.clone()),
+        None => (system.model.clone(), super::models::guess_groups(&ports)),
+    };
+    let mut groups = groups;
+    clean_groups(&mut groups);
+    Ok(Json(json!({
+        "system": {
+            "name": system.name,
+            "description": system.description,
+            "model": system.model,
+            "serial": system.serial,
+            "firmware": system.firmware,
+            "location": system.location,
+        },
+        "interfaces": ports.len(),
+        "names": ports.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+        "suggestion": {"name": system.name, "model": model, "groups": groups, "matched": matched.map(|m| m.id.as_str())},
+    })))
 }
 
 // ── SNMP ──

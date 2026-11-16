@@ -17,6 +17,7 @@ use crate::state::{AppState, Audience};
 pub mod api;
 pub mod live;
 pub mod model;
+pub mod models;
 mod multicast;
 mod scanner;
 mod snmp;
@@ -34,6 +35,7 @@ pub enum File {
     Multicast,
     Alerts,
     History,
+    Templates,
 }
 
 impl File {
@@ -47,6 +49,7 @@ impl File {
             File::Multicast => "multicast.json",
             File::Alerts => "alerts.json",
             File::History => "history.json",
+            File::Templates => "templates.json",
         }
     }
 }
@@ -64,6 +67,8 @@ pub struct Store {
     pub multicast: McastSettings,
     pub alerts: Vec<Alert>,
     pub history: Vec<HistoryEntry>,
+    /// Switch models saved by the users.
+    pub templates: Vec<SwitchModel>,
 }
 
 impl Store {
@@ -118,15 +123,25 @@ impl Net {
         let _ = std::fs::create_dir_all(&dir);
         let addresses: Vec<Address> = load(&dir, File::Addresses);
         let vlans: Vec<Vlan> = load(&dir, File::Vlans);
+        let mut switches: Vec<Switch> = load(&dir, File::Switches);
+        // Switches saved before port groups.
+        let mut migrated = false;
+        for s in switches.iter_mut() {
+            if s.migrate() {
+                s.normalize();
+                migrated = true;
+            }
+        }
         let store = Store {
             networks: load(&dir, File::Networks),
             addresses: addresses.into_iter().map(|a| (u32::from(a.ip), a)).collect(),
             vlans: vlans.into_iter().map(|v| (v.id, v)).collect(),
-            switches: load(&dir, File::Switches),
+            switches,
             snmp: load(&dir, File::Snmp),
             multicast: load(&dir, File::Multicast),
             alerts: load(&dir, File::Alerts),
             history: load(&dir, File::History),
+            templates: load(&dir, File::Templates),
         };
         // One writer thread: files are written in the order they were changed.
         let (writer, mut rx) = mpsc::unbounded_channel::<(PathBuf, Vec<u8>)>();
@@ -154,6 +169,9 @@ impl Net {
             watch: Mutex::default(),
             live: Mutex::default(),
         });
+        if migrated {
+            net.save(&[File::Switches]);
+        }
         scanner::spawn_scheduler(net.clone());
         scanner::spawn_monitor(net.clone());
         snmp::spawn_poller(net.clone());
@@ -196,6 +214,7 @@ impl Net {
                 File::Multicast => serde_json::to_vec_pretty(&st.multicast),
                 File::Alerts => serde_json::to_vec_pretty(&st.alerts),
                 File::History => serde_json::to_vec_pretty(&st.history),
+                File::Templates => serde_json::to_vec_pretty(&st.templates),
             };
             match bytes {
                 Ok(b) => {

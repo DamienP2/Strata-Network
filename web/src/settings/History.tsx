@@ -38,6 +38,8 @@ function actionText(a: string): string {
     'switch offline': () => t('switch offline'),
     'changed read interval': () => t('changed read interval'),
     'took config from switch': () => t('took config from switch'),
+    'saved switch model': () => t('saved switch model'),
+    'deleted switch model': () => t('deleted switch model'),
   };
   return known[a.toLowerCase()]?.() ?? a;
 }

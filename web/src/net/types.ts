@@ -82,16 +82,41 @@ export interface SwitchPort {
   lldp?: { name: string; port: string };
 }
 
+export type PortKind = 'rj45' | 'sfp' | 'qsfp';
+
+export interface PortGroup {
+  kind: PortKind;
+  count: number;
+  /** Nom d'interface avec `{n}` pour le numéro : « Gi1/0/{n} ». */
+  naming: string;
+  /** Premier numéro ; absent = à la suite du groupe d'avant s'il a le même nommage, sinon 1. */
+  start?: number;
+}
+
+/** Une façade de départ : fournie avec le serveur, ou enregistrée par un utilisateur. */
+export interface SwitchModel {
+  id: string;
+  brand: string;
+  model: string;
+  groups: PortGroup[];
+}
+
+/** Ce que la détection SNMP a lu et la façade qu'elle propose. */
+export interface Detected {
+  system: { name: string; description: string; model: string; serial: string; firmware: string; location: string };
+  interfaces: number;
+  names: string[];
+  suggestion: { name: string; model: string; groups: PortGroup[]; matched: string | null };
+}
+
 export interface Switch {
   id: string;
   name: string;
   model: string;
   ip?: string;
   group: string;
-  copper: number;
-  sfp: number;
-  naming: string;
-  sfpNaming: string;
+  /** La façade : groupes de ports, dans l'ordre. */
+  groups: PortGroup[];
   snmp?: string;
   ports: SwitchPort[];
   online: boolean;

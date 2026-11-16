@@ -48,8 +48,8 @@ interface Address {            // only known addresses are stored; the client fi
 interface Vlan { id: number /* 1..4094 */; name: string; color: string /* #rrggbb */; subnet?: string /* a.b.c.d/p */; gateway?: string; notes: string }
 
 interface SwitchPort {
-  n: number;                   // 1-based position on the faceplate (copper first, then SFP)
-  name: string;                // interface name, e.g. "Gi1/0/12" (generated from the switch naming, or from SNMP)
+  n: number;                   // 1-based position on the faceplate (1..total, in group order)
+  name: string;                // interface name, e.g. "Gi1/0/12" (generated from the naming of its group)
   label: string;
   mode: 'access' | 'trunk' | 'off';
   vlan?: number;               // access VLAN, or native VLAN of a trunk
@@ -60,16 +60,41 @@ interface SwitchPort {
   lldp?: { name: string; port: string }; // neighbour announced by LLDP (SNMP, read-only)
 }
 
+interface PortGroup {          // ports of one kind side by side on the faceplate
+  kind: 'rj45' | 'sfp' | 'qsfp';
+  count: number;               // 1..256
+  naming: string;              // "Gi1/0/{n}": {n} = start + index (a naming without {n} gets the number at the end)
+  start?: number;              // first number; absent = previous group's last number + 1 when the previous
+                               // group has the same naming, else 1 (Eth1/{n} 48 + 12 → Eth1/1…Eth1/60;
+                               // Gi1/0/{n} 48 then Te1/1/{n} 4 → Te1/1/1…Te1/1/4)
+}
+
 interface Switch {
   id: string; name: string; model: string; ip?: string;
   group: string;               // free grouping shown as a section of the left list ('' = none)
-  copper: number; sfp: number; // faceplate: copper ports in pairs (odd on top), then SFP ports
-  naming: string;              // "Gi1/0/{n}"; SFP: sfpNaming "Te1/1/{n}" ({n} restarts at 1)
-  sfpNaming: string;
+  groups: PortGroup[];         // the faceplate, in order; 1 to 256 ports in all
   snmp?: string;               // SnmpAgent id to read names, MAC table and LLDP from
-  ports: SwitchPort[];         // always copper + sfp entries
+  ports: SwitchPort[];         // always one entry per faceplate port
   online: boolean;             // read live through `snmp` (default false)
   onlineSecs: 5 | 10 | 30 | 60;   // seconds between two live reads (default 10)
+}
+
+// Switches saved before port groups ({copper, sfp, naming, sfpNaming}) are migrated when loaded to
+// [{rj45, copper, naming}, {sfp, sfp, sfpNaming}] (empty groups skipped) and saved back; ports keep their n.
+// POST / PUT still accept that old shape.
+
+interface SwitchModel {        // a faceplate to start from
+  id: string;                  // built-in: a fixed slug ("cisco-n9k-c93240yc-fx2"); user models: 12 hex
+  brand: string;               // '' for most user models
+  model: string;               // "Nexus C93240YC-FX2"
+  groups: PortGroup[];
+}
+
+interface Detected {           // what POST /api/switches/detect read
+  system: { name: string; description: string; model: string; serial: string; firmware: string; location: string };
+  interfaces: number;          // physical Ethernet ports found
+  names: string[];             // their names, in natural order
+  suggestion: { name: string; model: string; groups: PortGroup[]; matched: string | null };   // matched: built-in model id
 }
 
 interface Live {               // an online switch, in memory only (not saved)
@@ -144,7 +169,11 @@ interface HistoryEntry { at: number; user: string /* display name, or "scheduler
 | `PATCH /api/addresses/{ip}` | any of `label, kind, notes, reserved, watched, parent, switch, isNew` (`null` clears) → `Address` | |
 | `POST /api/addresses/{ip}/scan` | → `Address` | scans one address now |
 | `GET /api/vlans` · `POST` · `PUT /{id}` · `DELETE /{id}` | `Vlan` | 409 "this vlan exists"; `changed: vlans` |
-| `GET /api/switches` · `POST` · `PUT /{id}` · `DELETE /{id}` | `Switch` | PUT keeps ports by `n` when the faceplate size changes; `changed: switches` |
+| `GET /api/switches` · `POST` · `PUT /{id}` · `DELETE /{id}` | `Switch` | PUT keeps ports by `n` when the faceplate size changes; 400 "a switch has at least one port", 400 "a switch has at most 256 ports"; `changed: switches` |
+| `POST /api/switches/detect` | `{agentId?, ip?, port?, community?, v3?}` → `Detected` | reads the switch (SNMP, read-only); with `agentId` alone the agent is used as it is, with `ip` masked secrets are taken from `agentId` (as `/api/snmp/test`); 502 + SNMP message on failure |
+| `GET /api/switch-models` | → `{builtin: SwitchModel[], mine: SwitchModel[]}` | built-in catalog compiled into the server + user models; `changed: switchModels` |
+| `POST /api/switch-models` | `{brand, model, groups}` → `SwitchModel` | 400 "the name cannot be empty" (model), same port limits as a switch |
+| `DELETE /api/switch-models/{id}` | → 204 | user models only; 404 "no such switch model" |
 | `PATCH /api/switches/{id}/ports` | `{ports: number[], set: Partial<SwitchPort>}` → `Switch` | several ports at once |
 | `PATCH /api/switches/{id}/online` | `{online?, onlineSecs?}` → 204 | 400 "the switch has no snmp agent", 400 "the read interval is 5, 10, 30 or 60 seconds"; `changed: switches` |
 | `GET /api/switches/{id}/live` | → `Live` | 404 "the switch is not online" |
@@ -189,7 +218,15 @@ WebSocket, besides `changed`:
   inventory when the mode, the access VLAN or the tagged VLANs differ (a trunk's native VLAN only when the
   inventory sets one; VLAN 1, where switches leave unconfigured ports, matches an inventory port without VLAN). `take` copies mode, VLAN and tagged VLANs (a disabled port keeps its VLANs; VLAN 1 becomes no VLAN unless
   the inventory has a VLAN 1), and the port description as label when the inventory has none. Removing the switch's agent puts it offline.
+- **Detection** (`POST /api/switches/detect`): reads the system group and ENTITY chassis (name, description, model,
+  serial, firmware, location) and the interface table (ifName or ifDescr, ifType, ifHighSpeed). Physical ports are the
+  interfaces of type 6, 62, 69 or 117 (or, when the type is not given, named like Ethernet / Eth / Gi / Te / Twe / Fo /
+  Hu / xe- / ge- / et- / ether / sfp), minus Vlan, Po / port-channel, Lo / loopback, mgmt, Null, Tunnel, nve, sup-eth;
+  sorted naturally. When the ENTITY model or sysDescr names a built-in model (whole word, longest match wins) its groups
+  are proposed (`matched` = its id); else consecutive ports with the same naming pattern (prefix + trailing number) and
+  speed class (≥ 40 G qsfp, ≥ 10 G sfp, else rj45; a port without speed follows the one before) make a group.
 - **History**: every write route above adds an entry (`action`: "created network", "scanned", "changed port", "switch online", "switch offline",
-  "changed read interval", "took config from switch", …).
-- Storage: `<data>/network/{networks,addresses,vlans,switches,snmp,multicast,alerts,history}.json`, atomic writes;
+  "changed read interval", "took config from switch", "saved switch model", "deleted switch model", …).
+- Storage: `<data>/network/{networks,addresses,vlans,switches,snmp,multicast,alerts,history,templates}.json`
+  (`templates.json`: the user switch models), atomic writes;
   history kept 1 year, alerts 500 newest.

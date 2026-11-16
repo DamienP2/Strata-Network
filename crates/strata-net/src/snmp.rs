@@ -357,6 +357,7 @@ pub mod oids {
     pub const SYS_NAME: &str = "1.3.6.1.2.1.1.5.0";
     pub const IF_NAME: &str = "1.3.6.1.2.1.31.1.1.1.1";
     pub const IF_DESCR: &str = "1.3.6.1.2.1.2.2.1.2";
+    pub const IF_TYPE: &str = "1.3.6.1.2.1.2.2.1.3"; // IANAifType: 6 ethernetCsmacd, 117 gigabitEthernet
     pub const ARP: &str = "1.3.6.1.2.1.4.22.1.2"; // ipNetToMediaPhysAddress.ifIndex.a.b.c.d
     pub const BRIDGE_PORT_IF: &str = "1.3.6.1.2.1.17.1.4.1.2"; // dot1dBasePortIfIndex
     pub const FDB_Q: &str = "1.3.6.1.2.1.17.7.1.2.2.1.2"; // dot1qTpFdbPort.vlan.mac
@@ -677,6 +678,44 @@ pub async fn interfaces(s: &Session) -> io::Result<HashMap<u32, String>> {
         }
     }
     Ok(out)
+}
+
+/// An interface as the switch lists it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IfInfo {
+    pub if_index: u32,
+    /// ifName (`Gi1/0/12`), else ifDescr.
+    pub name: String,
+    /// IANA ifType; 0 when the switch does not say.
+    pub if_type: u32,
+    pub speed_mbps: u64,
+}
+
+/// Every interface: name, type and speed (to recognise the faceplate).
+pub async fn if_list(s: &Session) -> io::Result<Vec<IfInfo>> {
+    let mut by: std::collections::BTreeMap<u32, IfInfo> = std::collections::BTreeMap::new();
+    for (col, base) in [(0, oids::IF_DESCR), (1, oids::IF_NAME), (2, oids::IF_TYPE), (3, oids::IF_HIGH_SPEED)] {
+        let base = Oid::parse(base);
+        let rows = s.walk(&base, 20_000).await;
+        // The interface table must answer; the other columns may be missing.
+        let rows = if col == 0 { rows? } else { rows.unwrap_or_default() };
+        for (o, v) in rows {
+            let Some(i) = o.suffix(&base).first().copied() else { continue };
+            let e = by.entry(i).or_insert_with(|| IfInfo { if_index: i, ..IfInfo::default() });
+            match col {
+                0 | 1 => {
+                    let n = v.as_text().unwrap_or_default();
+                    if !n.is_empty() {
+                        e.name = n;
+                    }
+                }
+                2 => e.if_type = v.as_u64().unwrap_or(0) as u32,
+                _ => e.speed_mbps = v.as_u64().unwrap_or(0),
+            }
+        }
+    }
+    Ok(by.into_values().filter(|i| !i.name.is_empty()).collect())
 }
 
 /// A MAC address learnt on a switch port.

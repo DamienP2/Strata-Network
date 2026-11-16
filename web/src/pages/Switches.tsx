@@ -1,19 +1,20 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Check, EthernetPort, Pencil, Plus, Save, Search, Trash2, TriangleAlert, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Check, EthernetPort, Pencil, Plus, Search, TriangleAlert, X } from 'lucide-react';
 import { locale, t, tc, tn } from '../i18n';
 import { api, can, serverEvents, serverNow, useApp, useChanged } from '../store';
 import { navigate } from '../router';
-import { Field } from '../settings/ui';
 import { Segmented } from '../ui/fields';
 import { Dropdown, type DropOption } from '../ui/Dropdown';
 import { confirmDialog } from '../ui/dialogs';
 import { Empty } from '../ui/Empty';
 import { PageHead } from './SidePage';
-import { byIp, validIp } from '../net/ip';
+import { SwitchModal } from './SwitchModal';
+import { byIp } from '../net/ip';
 import { KIND_ICON, displayName, fail, fmtSeen, useAllAddresses, useList, vlanById } from '../net/model';
 import { InlineText, vlanStyle } from '../net/parts';
 import { fmtDuration } from '../ui/format';
-import type { Address, Live, LiveDiff, LivePort, Network, PortMode, SnmpAgent, Switch, SwitchPort, Vlan } from '../net/types';
+import { blocksOf, summary } from '../net/groups';
+import type { Address, Live, LiveDiff, LivePort, Network, PortKind, PortMode, SnmpAgent, Switch, SwitchPort, Vlan } from '../net/types';
 
 type PortSet = Partial<Record<keyof SwitchPort, unknown>>;
 /** Filtre : tous, un VLAN (`v:10`), les trunks, les libres ; en ligne : lien actif, sans lien, écarts, erreurs. */
@@ -163,6 +164,8 @@ export function Switches({ id }: { id?: string }) {
           onClose={() => setEditing(null)}
           onSaved={(s) => {
             setEditing(null);
+            // Dans la liste tout de suite : la page ne retombe pas sur un autre switch en attendant le rechargement.
+            if (s) setSwitches((list) => (list?.some((x) => x.id === s.id) ? list.map((x) => (x.id === s.id ? s : x)) : [...(list ?? []), s]));
             navigate(s ? `/switches/${s.id}` : '/switches', !s);
           }}
         />
@@ -214,10 +217,15 @@ function SwitchView({
         errors: sw.ports.filter((p) => errorsOf(liveOf.get(p.n)) > 0).length,
       }
     : null;
-  const copper = sw.ports.filter((p) => p.n <= sw.copper);
-  const sfp = sw.ports.filter((p) => p.n > sw.copper);
-  const blocks: SwitchPort[][] = [];
-  for (let i = 0; i < copper.length; i += 12) blocks.push(copper.slice(i, i + 12));
+  // La façade : chaque groupe de ports par blocs de 12 (2 rangées).
+  const blocks = useMemo(() => {
+    let at = 0;
+    return sw.groups.flatMap((g) => {
+      const list = sw.ports.slice(at, at + g.count);
+      at += g.count;
+      return blocksOf(list).map((ports) => ({ kind: g.kind, ports }));
+    });
+  }, [sw.groups, sw.ports]);
 
   const tick = (ns: number[], on: boolean) =>
     setTicked((old) => {
@@ -291,7 +299,7 @@ function SwitchView({
     const what = p.mode === 'off' ? t('disabled') : p.mode === 'trunk' ? t('trunk') : p.vlan !== undefined ? t('VLAN {id}', { id: p.vlan }) + (v ? ` ${v.name}` : '') : t('free');
     return [p.name || String(p.n), what, p.label].filter(Boolean).join(' · ');
   };
-  const face = (p: SwitchPort, isSfp: boolean) => {
+  const face = (p: SwitchPort, kind: PortKind) => {
     // En ligne : le lien et la charge lus dans le switch.
     const lp = live ? liveOf.get(p.n) : undefined;
     const up = !!lp?.up;
@@ -300,7 +308,7 @@ function SwitchView({
       <button
         key={p.n}
         type="button"
-        className={`sw-port ${isSfp ? 'sfp' : ''} ${p.mode === 'trunk' ? 'trunk' : ''} ${p.mode === 'off' ? 'off' : ''} ${live && !up ? 'down' : ''} ${diffOf.has(p.n) ? 'diff' : ''} ${ticked.has(p.n) ? 'sel' : ''}`}
+        className={`sw-port ${kind === 'rj45' ? '' : kind} ${p.mode === 'trunk' ? 'trunk' : ''} ${p.mode === 'off' ? 'off' : ''} ${live && !up ? 'down' : ''} ${diffOf.has(p.n) ? 'diff' : ''} ${ticked.has(p.n) ? 'sel' : ''}`}
         style={p.mode !== 'off' ? vlanStyle(vlanById(vlans, p.vlan)) : undefined}
         title={live ? `${portTitle(p)} · ${linkTitle(lp)}` : portTitle(p)}
         onClick={() => pick(p.n)}
@@ -325,7 +333,7 @@ function SwitchView({
     if (ok) await onTake(null);
   };
 
-  const sub = [sw.model, sw.ip, sw.group, sw.sfp ? t('{a} + {b} ports', { a: sw.copper, b: sw.sfp }) : tn(sw.copper, '{n} port', '{n} ports')].filter(Boolean);
+  const sub = [sw.model, sw.ip, sw.group, summary(sw.groups)].filter(Boolean);
   const vlanList: DropOption[] = (vlans ?? []).map((v) => ({ value: String(v.id), label: `${v.id} · ${v.name}`, icon: <span className="vlan-sw" style={vlanStyle(v)} /> }));
   const peerOptions: DropOption[] = switches
     .filter((x) => x.id !== sw.id)
@@ -375,11 +383,10 @@ function SwitchView({
         )}
         <div className={`sw-face ${live ? 'live-face' : ''}`}>
           {blocks.map((b, i) => (
-            <div key={i} className="sw-block">
-              {b.map((p) => face(p, false))}
+            <div key={i} className={`sw-block ${b.kind}`}>
+              {b.ports.map((p) => face(p, b.kind))}
             </div>
           ))}
-          {sfp.length > 0 && <div className="sw-sfp">{sfp.map((p) => face(p, true))}</div>}
         </div>
         <div className="sw-legend">
           {legend.per.map(([id, n]) => {
@@ -1004,118 +1011,6 @@ function BulkBar({
       <button type="button" className="btn primary" disabled={busy || !ready} onClick={() => void apply()}>
         <Check size={14} /> {t('Apply')}
       </button>
-    </div>
-  );
-}
-
-/* ---------- Créer / modifier un switch ---------- */
-
-function SwitchModal({ sw, agents, groups, onClose, onSaved }: { sw: Switch | null; agents: SnmpAgent[] | null; groups: string[]; onClose: () => void; onSaved: (s: Switch | null) => void }) {
-  const [name, setName] = useState(sw?.name ?? '');
-  const [model, setModel] = useState(sw?.model ?? '');
-  const [ip, setIp] = useState(sw?.ip ?? '');
-  const [group, setGroup] = useState(sw?.group ?? groups[0] ?? '');
-  const [copper, setCopper] = useState(String(sw?.copper ?? 24));
-  const [sfp, setSfp] = useState(String(sw?.sfp ?? 4));
-  const [naming, setNaming] = useState(sw?.naming ?? 'Gi1/0/{n}');
-  const [sfpNaming, setSfpNaming] = useState(sw?.sfpNaming ?? 'Te1/1/{n}');
-  const [snmp, setSnmp] = useState(sw?.snmp ?? '');
-  const [busy, setBusy] = useState(false);
-  const c = Number(copper);
-  const f = Number(sfp);
-  const badIp = ip.trim() !== '' && !validIp(ip.trim());
-  const badC = !Number.isInteger(c) || c < 0 || c > 96;
-  const badF = !Number.isInteger(f) || f < 0 || f > 32;
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (busy || badIp || badC || badF) return;
-    setBusy(true);
-    const body = {
-      ...(sw ?? { ports: [] }),
-      name: name.trim(),
-      model: model.trim(),
-      ip: ip.trim() || undefined,
-      group: group.trim(),
-      copper: c,
-      sfp: f,
-      naming: naming.trim(),
-      sfpNaming: sfpNaming.trim(),
-      snmp: snmp || undefined,
-    };
-    try {
-      onSaved(sw ? await api<Switch>('PUT', `/api/switches/${sw.id}`, body) : await api<Switch>('POST', '/api/switches', body));
-    } catch (err) {
-      fail(err);
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    if (!sw || !(await confirmDialog({ title: t('Delete the switch “{name}”?', { name: sw.name }), confirm: t('Delete'), danger: true }))) return;
-    try {
-      await api('DELETE', `/api/switches/${sw.id}`);
-      onSaved(null);
-    } catch (err) {
-      fail(err);
-    }
-  };
-
-  const agentOptions: DropOption[] = [{ value: '', label: '—' }, ...(agents ?? []).map((a) => ({ value: a.id, label: a.name, detail: a.ip }))];
-  if (sw?.snmp && !agents?.some((a) => a.id === sw.snmp)) agentOptions.push({ value: sw.snmp, label: sw.snmp });
-  return (
-    <div className="modal-back" onPointerDown={onClose}>
-      <form className="modal wide" role="dialog" aria-labelledby="sw-title" onPointerDown={(e) => e.stopPropagation()} onSubmit={submit}>
-        <header>
-          <h2 id="sw-title">{sw ? t('Edit {name}', { name: sw.name }) : t('New switch')}</h2>
-          <button type="button" className="icon-btn ghost" title={t('Close')} onClick={onClose}>
-            <X size={16} />
-          </button>
-        </header>
-        <div className="set-grid two">
-          <Field label={t('Name')}>
-            <input value={name} autoFocus={!sw} autoComplete="off" onChange={(e) => setName(e.target.value)} />
-          </Field>
-          <Field label={t('Model')}>
-            <input value={model} autoComplete="off" onChange={(e) => setModel(e.target.value)} />
-          </Field>
-          <Field label={t('IP')}>
-            <input className="mono" value={ip} placeholder={t('Optional')} aria-invalid={badIp} autoComplete="off" onChange={(e) => setIp(e.target.value)} />
-          </Field>
-          <Field label={t('Group')}>
-            <input value={group} placeholder={t('Optional')} autoComplete="off" onChange={(e) => setGroup(e.target.value)} />
-          </Field>
-          <Field label={t('Copper ports')}>
-            <input className="mono" value={copper} inputMode="numeric" aria-invalid={badC} autoComplete="off" onChange={(e) => setCopper(e.target.value)} />
-          </Field>
-          <Field label={t('SFP ports')}>
-            <input className="mono" value={sfp} inputMode="numeric" aria-invalid={badF} autoComplete="off" onChange={(e) => setSfp(e.target.value)} />
-          </Field>
-          <Field label={t('Port naming')}>
-            <input className="mono" value={naming} autoComplete="off" onChange={(e) => setNaming(e.target.value)} />
-          </Field>
-          <Field label={t('SFP naming')}>
-            <input className="mono" value={sfpNaming} autoComplete="off" onChange={(e) => setSfpNaming(e.target.value)} />
-          </Field>
-          <div className="set-field">
-            <span className="set-label">{t('SNMP agent')}</span>
-            <Dropdown value={snmp} options={agentOptions} onChange={setSnmp} />
-          </div>
-        </div>
-        <footer>
-          {sw && (
-            <button type="button" className="btn danger left" onClick={() => void remove()}>
-              <Trash2 size={14} /> {t('Delete')}
-            </button>
-          )}
-          <button type="button" className="btn" onClick={onClose}>
-            {t('Cancel')}
-          </button>
-          <button type="submit" className="btn primary" disabled={!name.trim() || badIp || badC || badF || busy}>
-            {sw ? <Save size={14} /> : <Plus size={14} />} {sw ? t('Save') : t('Create the switch')}
-          </button>
-        </footer>
-      </form>
     </div>
   );
 }
