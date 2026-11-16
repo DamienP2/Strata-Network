@@ -11,7 +11,14 @@ use serde::{Deserialize, Serialize};
 pub const MSG_SYNC: u8 = 0x0;
 pub const MSG_DELAY_REQ: u8 = 0x1;
 pub const MSG_PDELAY_REQ: u8 = 0x2;
+pub const MSG_FOLLOW_UP: u8 = 0x8;
+pub const MSG_DELAY_RESP: u8 = 0x9;
 pub const MSG_ANNOUNCE: u8 = 0xB;
+
+/// The Announce interval of the SMPTE ST 2059-2 profile (log2 seconds: 4 a second).
+pub const SMPTE_LOG_ANNOUNCE: i8 = -2;
+/// logMessageInterval of messages that have none (Delay_Req, management…).
+pub const NO_INTERVAL: i8 = 0x7F;
 
 /// An announcer silent for longer is not a candidate any more (3 × a 2 s interval, and some slack).
 pub const ANNOUNCE_STALE_MS: u64 = 10_000;
@@ -26,6 +33,9 @@ pub struct Header {
     /// Clock identity of the sender's port.
     pub clock: [u8; 8],
     pub port: u16,
+    /// logMessageInterval: the interval of this kind of message (Announce, Sync), or for a
+    /// Delay_Resp the minimum Delay_Req interval the master asks for (log2 seconds; 0x7F none).
+    pub log_interval: i8,
 }
 
 /// The dataset of an Announce message.
@@ -47,7 +57,7 @@ pub fn parse(p: &[u8]) -> Option<(Header, Option<Announce>)> {
     if p.len() < 34 || p[1] & 0x0F != 2 {
         return None;
     }
-    let h = Header { msg_type: p[0] & 0x0F, domain: p[4], clock: p[20..28].try_into().ok()?, port: u16::from_be_bytes([p[28], p[29]]) };
+    let h = Header { msg_type: p[0] & 0x0F, domain: p[4], clock: p[20..28].try_into().ok()?, port: u16::from_be_bytes([p[28], p[29]]), log_interval: p[33] as i8 };
     let a = (h.msg_type == MSG_ANNOUNCE && p.len() >= 64).then(|| Announce {
         utc_offset: i16::from_be_bytes([p[44], p[45]]),
         priority1: p[47],
@@ -65,6 +75,22 @@ pub fn parse(p: &[u8]) -> Option<(Header, Option<Announce>)> {
 /// "EC:46:70:FF:FE:00:1A:2B".
 pub fn identity(id: &[u8; 8]) -> String {
     id.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":")
+}
+
+/// A clock identity written any way ("ec4670fffe001a2b", "EC-46-70-FF-FE-00-1A-2B",
+/// "0xEC4670FFFE001A2B") as [`identity`] writes it; `None` when it is not 8 bytes of hex.
+pub fn normalize_identity(s: &str) -> Option<String> {
+    let s = s.trim();
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    let hex: String = s.chars().filter(|c| !matches!(c, ':' | '-' | '.' | ' ')).collect();
+    if hex.len() != 16 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut id = [0u8; 8];
+    for (i, b) in id.iter_mut().enumerate() {
+        *b = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(identity(&id))
 }
 
 /// The MAC inside an EUI-64 clock identity built from one (xx:xx:xx:FF:FE:xx:xx:xx).
@@ -103,6 +129,8 @@ pub struct Announcer {
     pub domain: u8,
     /// The sender's clock identity.
     pub clock: String,
+    /// The sender's PTP port number (of its clock).
+    pub port: u16,
     /// The grandmaster it announces (itself when it is the grandmaster).
     pub gm: String,
     pub priority1: u8,
@@ -121,6 +149,11 @@ pub struct Announcer {
     pub count: u64,
     /// Announce messages per second (from the interval between the last ones).
     pub rate: f32,
+    /// The intervals of the sender's port (log2 seconds): Announce, Sync (its Sync / Follow_Up
+    /// messages), minimum Delay_Req (its Delay_Resp messages); `None` until heard.
+    pub log_announce: Option<i8>,
+    pub log_sync: Option<i8>,
+    pub log_delay_req: Option<i8>,
 }
 
 impl Announcer {
@@ -139,6 +172,11 @@ pub fn compare(a: &Announcer, b: &Announcer) -> Ordering {
 /// The best announcer heard in the last [`ANNOUNCE_STALE_MS`] (of one domain, or of all).
 pub fn best(list: &[Announcer], domain: Option<u8>, now: u64) -> Option<&Announcer> {
     list.iter().filter(|a| domain.is_none_or(|d| a.domain == d) && now.saturating_sub(a.last_seen) <= ANNOUNCE_STALE_MS).min_by(|a, b| compare(a, b))
+}
+
+/// A logMessageInterval that says something (PTP uses −7..=7 in practice; 0x7F: none).
+fn interval(v: i8) -> Option<i8> {
+    (-16..=16).contains(&v).then_some(v)
 }
 
 /// A device that asks a master for the delay (Delay_Req or Pdelay_Req).
@@ -170,6 +208,7 @@ impl Tracker {
                     ip,
                     domain: h.domain,
                     clock: identity(&h.clock),
+                    port: h.port,
                     gm: String::new(),
                     priority1: 0,
                     clock_class: 0,
@@ -184,6 +223,9 @@ impl Tracker {
                     last_seen: now,
                     count: 0,
                     rate: 0.0,
+                    log_announce: None,
+                    log_sync: None,
+                    log_delay_req: None,
                 });
                 if e.count > 0 && now > e.last_seen {
                     let r = 1000.0 / (now - e.last_seen) as f32;
@@ -199,8 +241,20 @@ impl Tracker {
                 e.steps_removed = a.steps_removed;
                 e.time_source = time_source_name(a.time_source).to_string();
                 e.utc_offset = a.utc_offset;
+                e.port = h.port;
+                e.log_announce = interval(h.log_interval);
                 e.last_seen = now;
                 e.count += 1;
+            }
+            // The intervals of a master already heard announcing (same address, domain, clock).
+            (MSG_SYNC | MSG_FOLLOW_UP | MSG_DELAY_RESP, _) => {
+                if let Some(e) = self.announcers.get_mut(&(ip, h.domain, h.clock)) {
+                    if h.msg_type == MSG_DELAY_RESP {
+                        e.log_delay_req = interval(h.log_interval).or(e.log_delay_req);
+                    } else {
+                        e.log_sync = interval(h.log_interval).or(e.log_sync);
+                    }
+                }
             }
             (MSG_DELAY_REQ | MSG_PDELAY_REQ, _) => {
                 let e = self.followers.entry((h.clock, h.domain)).or_insert_with(|| Follower { clock: identity(&h.clock), ip, domain: h.domain, first_seen: now, last_seen: now, count: 0 });
@@ -238,6 +292,11 @@ pub struct Snapshot {
 
 /// A PTP message, for tests and tools: header + body.
 pub fn build(msg_type: u8, domain: u8, clock: [u8; 8], announce: Option<&Announce>) -> Vec<u8> {
+    build_with(msg_type, domain, clock, 1, NO_INTERVAL, announce)
+}
+
+/// [`build`] with the sender's port number and the logMessageInterval.
+pub fn build_with(msg_type: u8, domain: u8, clock: [u8; 8], port: u16, log_interval: i8, announce: Option<&Announce>) -> Vec<u8> {
     let len = if announce.is_some() { 64 } else { 44 };
     let mut p = vec![0u8; len];
     p[0] = msg_type;
@@ -245,7 +304,8 @@ pub fn build(msg_type: u8, domain: u8, clock: [u8; 8], announce: Option<&Announc
     p[2..4].copy_from_slice(&(len as u16).to_be_bytes());
     p[4] = domain;
     p[20..28].copy_from_slice(&clock);
-    p[28..30].copy_from_slice(&1u16.to_be_bytes());
+    p[28..30].copy_from_slice(&port.to_be_bytes());
+    p[33] = log_interval as u8;
     if let Some(a) = announce {
         p[44..46].copy_from_slice(&a.utc_offset.to_be_bytes());
         p[47] = a.priority1;
@@ -307,7 +367,29 @@ mod tests {
         t.record(ip(48), &build(MSG_ANNOUNCE, 127, GM2, Some(&ann(128, 6, 129, GM2))), 20_000);
         assert_eq!(best(&t.snapshot().announcers, Some(127), 20_500).unwrap().ip, ip(48));
         // Equal datasets: the grandmaster identity decides (smaller wins).
-        let a = Announcer { ip: ip(1), domain: 0, clock: "B".into(), gm: "B".into(), priority1: 1, clock_class: 6, clock_accuracy: 0x21, accuracy_ns: None, variance: 0, priority2: 1, steps_removed: 0, time_source: String::new(), utc_offset: 0, first_seen: 0, last_seen: 0, count: 0, rate: 0.0 };
+        let a = Announcer {
+            ip: ip(1),
+            domain: 0,
+            clock: "B".into(),
+            port: 1,
+            gm: "B".into(),
+            priority1: 1,
+            clock_class: 6,
+            clock_accuracy: 0x21,
+            accuracy_ns: None,
+            variance: 0,
+            priority2: 1,
+            steps_removed: 0,
+            time_source: String::new(),
+            utc_offset: 0,
+            first_seen: 0,
+            last_seen: 0,
+            count: 0,
+            rate: 0.0,
+            log_announce: None,
+            log_sync: None,
+            log_delay_req: None,
+        };
         let b = Announcer { gm: "A".into(), clock: "A".into(), ..a.clone() };
         assert_eq!(compare(&b, &a), Ordering::Less);
         let c = Announcer { steps_removed: 1, ..b.clone() };
@@ -326,6 +408,34 @@ mod tests {
         assert_eq!((s.followers[0].count, s.followers[0].domain), (2, 127));
         t.prune(FORGET_MS + 7);
         assert!(t.snapshot().followers.is_empty());
+    }
+
+    #[test]
+    fn boundary_clock_sender_and_intervals() {
+        // A boundary clock (the switch) relays GM1: the sender is not the grandmaster.
+        const BC: [u8; 8] = [0x70, 0x69, 0x5A, 0xFF, 0xFE, 0xEE, 0x6F, 0x79];
+        let ip = Ipv4Addr::new(10, 10, 1, 1);
+        let mut t = Tracker::default();
+        let a = Announce { steps_removed: 1, ..ann(128, 6, 128, GM1) };
+        // Sync before any Announce: nothing to attach it to.
+        t.record(ip, &build_with(MSG_SYNC, 127, BC, 31, -3, None), 900);
+        t.record(ip, &build_with(MSG_ANNOUNCE, 127, BC, 31, 0, Some(&a)), 1000);
+        t.record(ip, &build_with(MSG_SYNC, 127, BC, 31, -3, None), 1100);
+        t.record(ip, &build_with(MSG_DELAY_RESP, 127, BC, 31, -3, None), 1200);
+        // Another sender's Sync does not count.
+        t.record(Ipv4Addr::new(10, 10, 1, 2), &build_with(MSG_SYNC, 127, BC, 31, 2, None), 1300);
+        let s = t.snapshot();
+        assert_eq!(s.announcers.len(), 1);
+        let x = &s.announcers[0];
+        assert_eq!((x.clock.as_str(), x.gm.as_str(), x.port, x.steps_removed), ("70:69:5A:FF:FE:EE:6F:79", "EC:46:70:FF:FE:00:1A:2B", 31, 1));
+        assert_eq!((x.log_announce, x.log_sync, x.log_delay_req), (Some(0), Some(-3), Some(-3)));
+        // Delay_Req carry no interval (0x7F).
+        assert_eq!(parse(&build(MSG_DELAY_REQ, 127, BC, None)).unwrap().0.log_interval, NO_INTERVAL);
+        assert_eq!(interval(NO_INTERVAL), None);
+        assert_eq!(normalize_identity("ec4670fffe001a2b").as_deref(), Some("EC:46:70:FF:FE:00:1A:2B"));
+        assert_eq!(normalize_identity("0xEC-46-70-FF-FE-00-1A-2B").as_deref(), Some("EC:46:70:FF:FE:00:1A:2B"));
+        assert_eq!(normalize_identity("EC:46:70"), None);
+        assert_eq!(normalize_identity("zz4670fffe001a2b"), None);
     }
 
     #[test]

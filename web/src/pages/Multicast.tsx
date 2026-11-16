@@ -24,17 +24,19 @@ import { Dropdown, type DropOption } from '../ui/Dropdown';
 import { SubTabs } from './SidePage';
 import { byIp } from '../net/ip';
 import { fail, fmtBps, fmtSeen, useList, vlanById } from '../net/model';
+import { errorText } from '../ui/serverError';
+import { ORIGINS, originLabel, type NmosStatus, type Origin } from '../net/nmos';
 import { TONES, toneLabel, toneOf, attachText, type Flow, type Flows, type Tone } from '../net/mcast';
 import { FlowList, Mosaic } from './multicast/FlowViews';
 import { FlowMap } from './multicast/FlowMap';
 import { Plan } from './multicast/Plan';
-import { Ptp } from './multicast/Ptp';
+import { Ptp, ptpCount } from './multicast/Ptp';
 import { toneIcon } from './multicast/icons';
 import type { MulticastState, Service, Vlan } from '../net/types';
 
 type Tab = 'flows' | 'plan' | 'ptp' | 'services';
 type Check = 'unannounced' | 'noReceivers' | 'pairMissing' | 'conflict' | 'flooded';
-type Filter = 'all' | Tone | `vlan:${number}` | Check;
+type Filter = 'all' | Tone | `vlan:${number}` | `origin:${Origin}` | Check;
 type Leg = 'a' | 'b' | 'both';
 type View = 'map' | 'mosaic' | 'list';
 
@@ -45,6 +47,7 @@ const rateHistory: { at: number; v: number }[] = [];
 function matches(f: Flow, filter: Filter): boolean {
   if (filter === 'all') return true;
   if (filter.startsWith('vlan:')) return f.vlan === Number(filter.slice(5));
+  if (filter.startsWith('origin:')) return f.origins.includes(filter.slice(7) as Origin);
   if ((TONES as string[]).includes(filter)) return toneOf(f) === filter;
   if (filter === 'conflict') return f.conflict;
   return f.issues.includes(filter as Check);
@@ -56,6 +59,7 @@ export function Multicast() {
   const [data] = useList<Flows>('multicast', '/api/multicast/flows');
   const [vlans] = useList<Vlan[]>('vlans', '/api/vlans');
   const [services, reloadServices] = useList<{ at: number; services: Service[] }>('services', '/api/services');
+  const [nmos] = useList<NmosStatus>('nmos', '/api/nmos/status');
   const [tab, setTab] = useState<Tab>('flows');
   const [filter, setFilter] = useState<Filter>('all');
   const [leg, setLeg] = useState<Leg>('a');
@@ -151,6 +155,14 @@ export function Multicast() {
             return nav(k, <Icon size={15} />, toneLabel(k), count((f) => toneOf(f) === k));
           })}
         </div>
+        <div className="sys-group">
+          <div className="lib-nav-section">
+            <span className="grow">{t('Origin')}</span>
+          </div>
+          {ORIGINS.map((o) =>
+            nav(`origin:${o}`, <span className={`srcb ${o}`}>{originLabel(o)}</span>, o === 'nmos' ? t('Registry') : o === 'sap' ? t('Announcements') : t('Switch tables'), count((f) => f.origins.includes(o))),
+          )}
+        </div>
         {vlanIds.length > 0 && (
           <div className="sys-group">
             <div className="lib-nav-section">
@@ -199,13 +211,14 @@ export function Multicast() {
           </div>
           <Kpis data={data} />
           <Problems data={data} vlans={vlans} onShow={(f) => pick(f)} />
+          {nmos?.enabled && <RegistryBar s={nmos} />}
           <SubTabs
             current={tab}
             onPick={(v) => setTab(v as Tab)}
             items={[
               { id: 'flows', icon: <Radio size={14} />, label: t('Streams'), count: flows.length },
               { id: 'plan', icon: <LayoutGrid size={14} />, label: t('Group plan') },
-              { id: 'ptp', icon: <Timer size={14} />, label: t('PTP'), count: data.ptp.clocks.length + data.ptp.devices.length },
+              { id: 'ptp', icon: <Timer size={14} />, label: t('PTP'), count: ptpCount(data.ptp) },
               { id: 'services', icon: <NetworkIcon size={14} />, label: t('Services'), count: services?.services.length },
             ]}
           >
@@ -281,7 +294,8 @@ function Kpis({ data }: { data: Flows }) {
   const { pairs, pairsIncomplete } = data.summary;
   const circ = 2 * Math.PI * 15;
   const ok = pairs ? (pairs - pairsIncomplete) / pairs : 0;
-  const gm = data.ptp.gm;
+  const gm = data.ptp.grandmaster;
+  const followers = data.ptp.devices.length + data.ptp.ports.filter((p) => p.activity === 'active').length;
   const read = data.switches.filter((s) => s.read);
   const lastRead = Math.max(0, ...read.map((s) => s.at));
   const pts = rateHistory.map((p) => p.v);
@@ -335,12 +349,12 @@ function Kpis({ data }: { data: Flows }) {
         <span className="set-label">
           <Timer size={13} /> {t('PTP')}
         </span>
-        <span className="v name" title={gm?.gm}>
-          {gm ? gm.name || gm.ip : '—'}
+        <span className="v name" title={gm?.identity}>
+          {gm ? gm.name || gm.identity : '—'}
         </span>
         {gm && (
           <span className="muted">
-            <span className={gm.live ? 'ok-t' : 'warn-t'}>●</span> {t('domain {d}', { d: gm.domain })} · {tn(data.ptp.devices.length, '{n} follower', '{n} followers')}
+            <span className={gm.live ? 'ok-t' : 'warn-t'}>●</span> {t('domain {d}', { d: gm.domain })} · {tn(followers, '{n} follower', '{n} followers')}
           </span>
         )}
       </div>
@@ -395,6 +409,21 @@ function Problems({ data, vlans, onShow }: { data: Flows; vlans: Vlan[] | null; 
       <button className="btn small" onClick={() => onShow(conflicts.size ? 'conflict' : 'flooded')}>
         {t('Show')}
       </button>
+    </div>
+  );
+}
+
+/** Le registre NMOS lu : nom, émetteurs, récepteurs abonnés, rythme (ou l'erreur). */
+function RegistryBar({ s }: { s: NmosStatus }) {
+  return (
+    <div className="info-bar">
+      <Radio size={16} />
+      <span className="grow">
+        {t('NMOS registry')} <b>{s.registry ?? s.url}</b>
+        {s.at > 0 && ` · ${tn(s.senders, '{n} sender', '{n} senders')} · ${tn(s.subscribed, '{n} subscribed receiver', '{n} subscribed receivers')}`}
+        {' · '}
+        {s.error ? <span className="warn-t">{errorText(s.error)}</span> : s.refresh === 'live' ? t('read live') : t('read every 60 s')}
+      </span>
     </div>
   );
 }

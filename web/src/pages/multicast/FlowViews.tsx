@@ -6,6 +6,7 @@ import { alertDialog, promptDialog } from '../../ui/dialogs';
 import { fail, fmtBps, fmtInt, fmtSeen } from '../../net/model';
 import { attachText, flowRate, formatText, imageText, shortPort, toneLabel, toneOf, type Flow, type Flows, type Receiver, type Tone } from '../../net/mcast';
 import { toneIcon } from './icons';
+import { originLabel } from '../../net/nmos';
 
 /* ---------- Petits éléments ---------- */
 
@@ -41,7 +42,14 @@ const receiverChip = (r: Receiver) => (r.router || r.peer ? `${r.switchName} ${s
 /** Les puces des récepteurs, autant que la cellule en tient, puis « +N ». */
 export function ReceiverChips({ f }: { f: Flow }) {
   const ref = useRef<HTMLDivElement>(null);
-  const list = [...f.receivers].sort((a, b) => Number(a.router || !!a.peer) - Number(b.router || !!b.peer));
+  const igmp = [...f.receivers]
+    .sort((a, b) => Number(a.router || !!a.peer) - Number(b.router || !!b.peer))
+    .map((r) => ({ key: `${r.switchId}|${r.port}`, text: receiverChip(r), title: `${r.switchName} ${r.port}${r.label ? ` · ${r.label}` : ''}`, router: r.router }));
+  // Les abonnés NMOS que les tables IGMP ne montrent pas.
+  const subs = (f.subscribers ?? [])
+    .filter((s) => !s.igmp)
+    .map((s) => ({ key: `nmos|${s.id}`, text: s.node || s.label, title: [s.label, attachText(s.at)].filter(Boolean).join(' · '), router: false }));
+  const list = [...igmp, ...subs];
   const [fit, setFit] = useState(list.length);
   const measure = useCallback(() => {
     const el = ref.current;
@@ -63,17 +71,17 @@ export function ReceiverChips({ f }: { f: Flow }) {
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [measure, f.receivers]);
+  }, [measure, f.receivers, f.subscribers]);
   const rest = list.slice(fit);
   return (
     <div className="ports-list" ref={ref}>
       {list.map((r, i) => (
-        <span key={`${r.switchId}|${r.port}`} className={`pchip ${r.router ? 'router' : ''} ${i >= fit ? 'hide' : ''}`} title={`${r.switchName} ${r.port}${r.label ? ` · ${r.label}` : ''}`}>
-          {receiverChip(r)}
+        <span key={r.key} className={`pchip ${r.router ? 'router' : ''} ${i >= fit ? 'hide' : ''}`} title={r.title}>
+          {r.text}
         </span>
       ))}
       {rest.length > 0 && (
-        <span className="pchip more" title={rest.map(receiverChip).join('\n')}>
+        <span className="pchip more" title={rest.map((r) => r.text).join('\n')}>
           +{rest.length}
         </span>
       )}
@@ -160,7 +168,7 @@ export function FlowFacts({ f, data }: { f: Flow; data: Flows }) {
   const hops = [f.emitter?.at ? shortPort(f.emitter.at.port) : '', ...f.path.filter((n) => n.egress).map((n) => shortPort(n.egress!))].filter(Boolean).join(' → ');
   const enc = [f.encoding, m?.sampling, m?.depth && toneOf(f) === 'v' ? t('{n} bits', { n: m.depth }) : ''].filter(Boolean).join(' · ');
   const rows: [string, string][] = [
-    [t('Announcement'), f.lastAnnounced ? t('SAP · {ago}', { ago: fmtSeen(f.lastAnnounced) }) : t('none')],
+    [t('Announcement'), [f.nmos ? t('NMOS · {name}', { name: f.nmos.node ?? f.nmos.sender }) : '', f.lastAnnounced ? t('SAP · {ago}', { ago: fmtSeen(f.lastAnnounced) }) : ''].filter(Boolean).join(' · ') || t('none')],
     [t('Encoding'), enc || formatText(f)],
     [toneOf(f) === 'v' ? t('Image') : t('Format'), imageText(m) || formatText(f)],
     [t('Clock'), clock ?? ''],
@@ -184,7 +192,11 @@ export function FlowFacts({ f, data }: { f: Flow; data: Flows }) {
 
 /** Émetteur → switchs → récepteurs, en ligne. */
 export function PathChain({ f }: { f: Flow }) {
-  const edge = f.receivers.filter((r) => !r.router && !r.peer);
+  const edge = [
+    ...f.receivers.filter((r) => !r.router && !r.peer).map((r) => ({ key: `${r.switchId}|${r.port}`, name: receiverName(r), port: shortPort(r.port), title: `${r.switchName} ${r.port}` })),
+    // Les abonnés NMOS absents des tables IGMP.
+    ...(f.subscribers ?? []).filter((s) => !s.igmp).map((s) => ({ key: `nmos|${s.id}`, name: s.node || s.label, port: s.at ? shortPort(s.at.port) : '', title: [s.label, attachText(s.at)].filter(Boolean).join(' · ') })),
+  ];
   const Icon = toneIcon(toneOf(f));
   return (
     <div className="path">
@@ -209,15 +221,15 @@ export function PathChain({ f }: { f: Flow }) {
       ))}
       {edge.length > 0 && (
         <>
-          {(f.path.length > 0 || f.emitter) && <div className="wire">{[...new Set(edge.map((r) => shortPort(r.port)))].slice(0, 3).join(' · ')}</div>}
+          {(f.path.length > 0 || f.emitter) && <div className="wire">{[...new Set(edge.map((r) => r.port).filter(Boolean))].slice(0, 3).join(' · ')}</div>}
           <div className="node rcv">
             <b>
               <Users size={13} /> {tn(edge.length, '{n} receiver', '{n} receivers')}
             </b>
             <div className="pl">
               {edge.slice(0, 12).map((r) => (
-                <span key={`${r.switchId}|${r.port}`} className="pchip" title={`${r.switchName} ${r.port}`}>
-                  {receiverName(r)}
+                <span key={r.key} className="pchip" title={r.title}>
+                  {r.name}
                 </span>
               ))}
               {edge.length > 12 && <span className="pchip">+{edge.length - 12}</span>}
@@ -303,10 +315,11 @@ export function FlowList({ flows, data, open, onOpen }: { flows: Flow[]; data: F
         <col style={{ width: '17%' }} />
         <col style={{ width: 84 }} />
         <col style={{ width: 160 }} />
-        <col style={{ width: '20%' }} />
         <col style={{ width: '17%' }} />
+        <col style={{ width: '15%' }} />
         <col style={{ width: 96 }} />
         <col style={{ width: 70 }} />
+        <col style={{ width: 104 }} />
         <col style={{ width: 42 }} />
       </colgroup>
       <thead>
@@ -320,6 +333,7 @@ export function FlowList({ flows, data, open, onOpen }: { flows: Flow[]; data: F
           <th>{t('Receivers')}</th>
           <th className="num">{t('Rate')}</th>
           <th>{t('2022-7')}</th>
+          <th>{t('Origin')}</th>
           <th />
         </tr>
       </thead>
@@ -348,7 +362,7 @@ export function FlowList({ flows, data, open, onOpen }: { flows: Flow[]; data: F
                   ) : f.emitter ? (
                     <span className="src" title={f.emitter.ip}>
                       {f.emitter.name ?? f.emitter.ip}
-                      <small>{attachText(f.emitter.at)}</small>
+                      <small>{attachText(f.emitter.at) || (f.nmos && !f.nmos.inventory ? t('not in inventory') : '')}</small>
                     </span>
                   ) : (
                     <span className="muted2">—</span>
@@ -366,6 +380,13 @@ export function FlowList({ flows, data, open, onOpen }: { flows: Flow[]; data: F
                 <td>
                   <PairBadge f={f} />
                 </td>
+                <td>
+                  {f.origins.map((o) => (
+                    <span key={o} className={`srcb ${o}`}>
+                      {originLabel(o)}
+                    </span>
+                  ))}
+                </td>
                 <td className="exp-cell">
                   <button className="exp" aria-expanded={on} title={on ? t('Close') : t('Details')} onClick={(e) => (e.stopPropagation(), onOpen(on ? null : f.key))}>
                     <ChevronDown size={12} />
@@ -374,7 +395,7 @@ export function FlowList({ flows, data, open, onOpen }: { flows: Flow[]; data: F
               </tr>
               {on && (
                 <tr className="detail">
-                  <td colSpan={10}>
+                  <td colSpan={11}>
                     <div className="det">
                       <PathChain f={f} />
                       <div className="det-actions">

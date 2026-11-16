@@ -143,6 +143,7 @@ export interface AlertRules {
   drift: Rule;
   neighbours: Rule;
   poe: Rule;
+  ptpMute: Rule;
 }
 
 /** Une interface du switch : son port de façade quand elle en est un. */
@@ -226,6 +227,61 @@ export interface SwitchInfo {
   poe?: { budgetW?: number; usedW?: number; ports: PoePort[] };
   /** Voisins qui sont un autre switch de l'inventaire, pas encore reliés. */
   links: { n: number; switchId: string; port: number }[];
+  /** L'horloge PTP du switch et ses ports (CISCO-PTP-MIB) ; absent : pas de PTP lu. */
+  ptp?: PtpSwitch;
+}
+
+export type PtpPortState = 'initializing' | 'faulty' | 'disabled' | 'listening' | 'preMaster' | 'master' | 'passive' | 'uncalibrated' | 'slave' | 'unknown';
+export type PtpActivity = 'active' | 'none' | 'mute';
+
+export interface PtpGm {
+  identity: string;
+  name?: string;
+  ip?: string;
+  priority1?: number;
+  priority2?: number;
+  clockClass?: number;
+  clockAccuracy?: number;
+  accuracyNs?: number;
+}
+
+/** Un port PTP d'un switch. */
+export interface PtpPort extends InfoPort {
+  number: number;
+  domain: number;
+  state: PtpPortState;
+  logAnnounce?: number;
+  logSync?: number;
+  logDelayReq?: number;
+  announceTimeout?: number;
+  delayMech?: 'e2e' | 'p2p' | 'disabled';
+  /** Messages PTP par seconde (tous types), reçus et envoyés. */
+  rxPs?: number;
+  txPs?: number;
+  activity?: PtpActivity;
+  muteSince?: number;
+  device?: string;
+  deviceIp?: string;
+  peerSwitch?: string;
+}
+
+export interface PtpSwitch {
+  at: number;
+  domain: number;
+  clockType: 'ordinary' | 'boundary' | 'transparent' | 'boundaryNode' | 'other';
+  identity?: string;
+  twoStep?: boolean;
+  stepsRemoved?: number;
+  offsetNs?: number;
+  meanPathDelayNs?: number;
+  parent?: string;
+  parentPort?: number;
+  gm?: PtpGm;
+  servo?: string;
+  slave?: InfoPort;
+  /** [ms, ns], les plus anciennes d'abord. */
+  corrections: [number, number][];
+  ports: PtpPort[];
 }
 
 /** L'historique des débits d'un port. */
@@ -358,6 +414,7 @@ export type AlertKind =
   | 'fanFault'
   | 'tempHigh'
   | 'poeBudget'
+  | 'ptpMute'
   | 'neighbourNew'
   | 'neighbourGone'
   | 'streamGone'

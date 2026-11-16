@@ -6,7 +6,8 @@ import { Check, NumberField, Segmented } from '../ui/fields';
 import { fmtBytes, fmtDate, fmtDateTime, fmtDuration, fmtHm, fmtWeekday, sameDay, tone } from '../ui/format';
 import { ALERT_TONE, alertDetail, alertLabel, fail, fmtBps, portName, signed, unitState, vlanById } from '../net/model';
 import { vlanStyle } from '../net/parts';
-import type { Alert, AlertRules, InfoPort, Live, Optic, PortHistory, Rule, Switch, SwitchInfo, SwitchPort, Vlan } from '../net/types';
+import { Activity, CorrSpark, Intervals, PortStateBadge, clockTypeLabel, fmtCorr, fmtNs, fmtRate } from '../net/ptp';
+import type { Alert, AlertRules, InfoPort, Live, Optic, PortHistory, PtpPort, Rule, Switch, SwitchInfo, SwitchPort, Vlan } from '../net/types';
 
 /* ---------- Lectures lentes d'un switch en ligne ---------- */
 
@@ -522,6 +523,108 @@ export function McastPane({ sw, info, vlans }: { sw: Switch; info: SwitchInfo; v
   );
 }
 
+/* ---------- PTP ---------- */
+
+/** Le switch a une horloge PTP lue (CISCO-PTP-MIB). */
+export const hasPtp = (i: SwitchInfo | null) => !!i?.ptp && i.ptp.ports.length > 0;
+
+/** Messages PTP par seconde : tous types dans un sens, les Delay_Req dans l'autre. */
+function messages(p: PtpPort): string {
+  if (p.rxPs === undefined || p.txPs === undefined) return '—';
+  const rx = fmtRate(p.rxPs);
+  const tx = fmtRate(p.txPs);
+  if (p.state === 'master') return t('↑ {tx} · ↓ DReq {rx}', { tx, rx });
+  if (p.state === 'slave') return t('↓ {rx} · ↑ DReq {tx}', { tx, rx });
+  return `↑ ${tx} · ↓ ${rx}`;
+}
+
+export function PtpPane({ sw, info }: { sw: Switch; info: SwitchInfo }) {
+  const p = info.ptp;
+  if (!p) return null;
+  const corr = p.corrections.map((c) => c[1]);
+  const corrText = corr.length ? fmtCorr(corr) : p.offsetNs !== undefined ? fmtCorr([p.offsetNs]) : '—';
+  const items: { label: string; value: string; mono?: boolean; cls?: string; title?: string }[] = [
+    { label: t('Role'), value: clockTypeLabel(p.clockType) },
+    { label: t('Identity'), value: p.identity ?? '—', mono: true },
+    { label: t('Grandmaster'), value: p.gm ? (p.gm.name ?? p.gm.identity) : '—', title: p.gm?.identity },
+    { label: t('Slave port'), value: p.slave ? ifName(sw, p.slave) : '—', mono: true },
+    { label: t('Correction · delay'), value: `${corrText} · ${p.meanPathDelayNs !== undefined ? fmtNs(p.meanPathDelayNs) : '—'}`, cls: p.slave ? 'ok-t' : '' },
+    { label: t('Domain'), value: String(p.domain) },
+  ];
+  return (
+    <>
+      <div className="sys-strip">
+        {items.map((i) => (
+          <div key={i.label}>
+            <span className="set-label">{i.label}</span>
+            <b className={[i.mono ? 'mono' : '', i.cls ?? ''].join(' ').trim() || undefined} title={i.title ?? i.value}>
+              {i.value}
+            </b>
+          </div>
+        ))}
+      </div>
+      <table className="pt">
+        <colgroup>
+          <col style={{ width: 110 }} />
+          <col style={{ width: '20%' }} />
+          <col style={{ width: 100 }} />
+          <col style={{ width: 80 }} />
+          <col style={{ width: 220 }} />
+          <col style={{ width: 160 }} />
+          <col />
+          <col style={{ width: 190 }} />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>{t('Port')}</th>
+            <th>{t('Equipment')}</th>
+            <th>{t('State')}</th>
+            <th className="num">{t('Domain')}</th>
+            <th>{t('Announce · Sync · Delay_Req')}</th>
+            <th>{t('Delay · correction')}</th>
+            <th>{t('Activity')}</th>
+            <th title={t('PTP messages a second, every kind; Delay_Req: received by a master port, sent by a slave port')}>{t('Messages / s')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {p.ports.map((x) => {
+            const slave = x.state === 'slave';
+            const quiet = x.state === 'disabled' || x.state === 'faulty' || x.state === 'passive';
+            return (
+              <tr key={`${x.domain}:${x.number}`}>
+                <td>
+                  {x.n !== undefined && <b className="ip">{x.n}</b>} <span className="ip muted2">{ifName(sw, x)}</span>
+                </td>
+                <td className={x.device ? '' : 'muted2'} title={x.deviceIp}>
+                  {x.device ?? '—'}
+                </td>
+                <td>
+                  <PortStateBadge state={x.state} />
+                </td>
+                <td className={`num ip ${x.domain !== p.domain ? 'warn-t' : ''}`}>{x.state === 'disabled' ? '—' : x.domain}</td>
+                <td>{quiet ? <span className="ivl">—</span> : <Intervals ann={x.logAnnounce} sync={x.logSync} dreq={x.logDelayReq} />}</td>
+                <td className={`ip ${slave ? '' : 'muted2'}`}>{slave ? `${p.meanPathDelayNs !== undefined ? fmtNs(p.meanPathDelayNs) : '—'} · ${corrText}` : '—'}</td>
+                <td>
+                  {slave ? (
+                    <span className="corr">
+                      <CorrSpark values={corr} width={90} />
+                    </span>
+                  ) : x.state === 'master' ? (
+                    <Activity activity={x.activity} since={x.muteSince} words="device" />
+                  ) : (
+                    <span className="muted2">—</span>
+                  )}
+                </td>
+                <td className="ip">{quiet && x.state !== 'passive' ? '—' : messages(x)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
 /* ---------- Santé ---------- */
 
 function Spark({ points }: { points: [number, number][] }) {
@@ -623,12 +726,14 @@ export function AlertsPane({
   sw,
   alerts,
   poe,
+  ptp,
   editable,
   onRules,
 }: {
   sw: Switch;
   alerts: Alert[];
   poe: boolean;
+  ptp: boolean;
   editable: boolean;
   onRules: (r: AlertRules) => Promise<void>;
 }) {
@@ -681,6 +786,7 @@ export function AlertsPane({
         {row('saturation', t('Saturated port'), numIn('saturation', t('above'), t('% for 1 min'), { min: 1, max: 100 }))}
         {row('health', t('Power supply, fan or temperature'), numIn('health', t('above'), t('°C'), { min: 20, max: 150 }))}
         {poe && row('poe', t('PoE budget'), numIn('poe', t('above'), t('%'), { min: 1, max: 100 }))}
+        {ptp && row('ptpMute', t('Silent PTP device'), numIn('ptpMute', t('after'), t('s without Delay_Req'), { min: 15, max: 3600 }))}
         {row('drift', t('New setup difference'), <div className="muted">{t('VLAN, mode or disabled port')}</div>)}
         {row('neighbours', t('New or gone neighbour'), <div className="muted">{t('CDP / LLDP')}</div>)}
       </div>

@@ -14,6 +14,7 @@ pub mod ping;
 pub mod ports;
 pub mod probe;
 pub mod ptp;
+pub mod ptpmib;
 pub mod scan;
 pub mod snmp;
 pub mod snmpv3;

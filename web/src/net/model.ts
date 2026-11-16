@@ -294,6 +294,7 @@ export const ALERT_KINDS: AlertKind[] = [
   'fanFault',
   'tempHigh',
   'poeBudget',
+  'ptpMute',
   'neighbourNew',
   'neighbourGone',
   'streamGone',
@@ -341,6 +342,8 @@ export function alertLabel(k: AlertKind): string {
       return t('Temperature');
     case 'poeBudget':
       return t('PoE budget');
+    case 'ptpMute':
+      return t('Silent PTP device');
     case 'neighbourNew':
       return t('New neighbour');
     case 'neighbourGone':
@@ -380,6 +383,7 @@ export const ALERT_TONE: Record<AlertKind, string> = {
   fanFault: 'bad',
   tempHigh: 'ptp',
   poeBudget: 'ptp',
+  ptpMute: 'ptp',
   neighbourNew: 'video',
   neighbourGone: '',
   streamGone: 'bad',
@@ -456,6 +460,8 @@ export function alertDetail(a: Alert): string {
       return `${a.detail} · ${t('{n} °C (limit {limit} °C)', { n: dec(v), limit: dec(lim, 0) })}`;
     case 'poeBudget':
       return t('{n} % of the budget (limit {limit} %)', { n: dec(v), limit: dec(lim, 0) });
+    case 'ptpMute':
+      return [a.detail, t('no Delay_Req for more than {n} s', { n: dec(lim, 0) })].filter(Boolean).join(' · ');
     case 'groupConflict': {
       const m = a.detail.match(/^(\S+) from (.+)$/);
       return m ? t('{group} from {list}', { group: m[1], list: factText(m[2]) }) : factText(a.detail);

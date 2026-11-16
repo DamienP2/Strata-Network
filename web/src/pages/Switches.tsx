@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Bell, Check, ChevronDown, EthernetPort, HeartPulse, Link2, Pencil, Plus, Radio, Search, Sun, TriangleAlert, X } from 'lucide-react';
+import { Bell, Check, ChevronDown, EthernetPort, HeartPulse, Link2, Pencil, Plus, Radio, Search, Sun, Timer, TriangleAlert, X } from 'lucide-react';
 import { locale, t, tc, tn } from '../i18n';
 import { api, can, serverEvents, serverNow, useApp, useChanged } from '../store';
 import { navigate } from '../router';
@@ -8,7 +8,7 @@ import { Dropdown, type DropOption } from '../ui/Dropdown';
 import { confirmDialog } from '../ui/dialogs';
 import { Empty } from '../ui/Empty';
 import { PageHead, SubTabs, type SubTab } from './SidePage';
-import { AlertsPane, HealthPane, HealthStrip, McastPane, OpticsPane, PortChart, hasHealth, ifName, poePct, shortAgg, useInfo, weakOptic } from './SwitchInfo';
+import { AlertsPane, HealthPane, HealthStrip, McastPane, OpticsPane, PortChart, PtpPane, hasHealth, hasPtp, ifName, poePct, shortAgg, useInfo, weakOptic } from './SwitchInfo';
 import { SwitchModal } from './SwitchModal';
 import { byIp } from '../net/ip';
 import { KIND_ICON, diffWords, displayName, fail, fmtSeen, portName, signed, useAllAddresses, useList, vlanById } from '../net/model';
@@ -20,7 +20,7 @@ type PortSet = Partial<Record<keyof SwitchPort, unknown>>;
 /** Filtre : tous, un VLAN (`v:10`), les trunks, les libres ; en ligne : lien actif, sans lien, écarts, erreurs, rejets, voisins, agrégats, surveillés. */
 type Filter = 'all' | 'trunk' | 'free' | `v:${number}` | 'up' | 'down' | 'diff' | 'errors' | 'discards' | 'nb' | 'lag' | 'watched';
 const LIVE_FILTERS: Filter[] = ['up', 'down', 'diff', 'errors', 'discards', 'nb', 'lag', 'watched'];
-type Tab = 'ports' | 'optics' | 'mcast' | 'health' | 'alerts';
+type Tab = 'ports' | 'optics' | 'mcast' | 'ptp' | 'health' | 'alerts';
 
 export function Switches({ id }: { id?: string }) {
   const user = useApp((s) => s.auth?.user);
@@ -255,6 +255,7 @@ function SwitchView({
   const tabs: SubTab[] = [{ id: 'ports', icon: <EthernetPort size={14} />, label: t('Ports'), count: sw.ports.length }];
   if (info?.optics.length) tabs.push({ id: 'optics', icon: <Sun size={14} />, label: t('Optics'), count: info.optics.length });
   if (info?.mcast.length) tabs.push({ id: 'mcast', icon: <Radio size={14} />, label: t('Multicast'), count: info.mcast.length });
+  if (hasPtp(info)) tabs.push({ id: 'ptp', icon: <Timer size={14} />, label: t('PTP'), count: info?.ptp?.ports.length });
   if (hasHealth(info)) tabs.push({ id: 'health', icon: <HeartPulse size={14} />, label: t('Health') });
   tabs.push({ id: 'alerts', icon: <Bell size={14} />, label: t('Alerts'), count: unseen.length || undefined });
   const current = tabs.some((x) => x.id === tab) ? tab : 'ports';
@@ -782,8 +783,9 @@ function SwitchView({
         )}
         {current === 'optics' && info && <OpticsPane sw={sw} info={info} />}
         {current === 'mcast' && info && <McastPane sw={sw} info={info} vlans={vlans} />}
+        {current === 'ptp' && info && <PtpPane sw={sw} info={info} />}
         {current === 'health' && info && <HealthPane live={live} info={info} />}
-        {current === 'alerts' && <AlertsPane sw={sw} alerts={alerts} poe={isPoe} editable={editable} onRules={onRules} />}
+        {current === 'alerts' && <AlertsPane sw={sw} alerts={alerts} poe={isPoe} ptp={hasPtp(info)} editable={editable} onRules={onRules} />}
       </div>
     </main>
   );

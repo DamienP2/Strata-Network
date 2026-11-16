@@ -22,7 +22,9 @@ pub mod mflows;
 pub mod model;
 pub mod models;
 mod multicast;
+pub mod nmos;
 pub mod notify;
+pub mod ptpsw;
 pub mod rates;
 mod scanner;
 mod snmp;
@@ -112,6 +114,8 @@ pub struct Net {
     pub rates: Mutex<HashMap<String, rates::SwitchRates>>,
     /// Alert notifications (e-mail, webhooks).
     pub notify: notify::Notifier,
+    /// The NMOS registry (read only).
+    pub nmos: nmos::Nmos,
 }
 
 fn load<T: serde::de::DeserializeOwned + Default>(dir: &std::path::Path, f: File) -> T {
@@ -167,6 +171,7 @@ impl Net {
         #[cfg(unix)]
         strata_net::raise_file_limit();
         let notify = notify::Notifier::load(&dir);
+        let nmos = nmos::Nmos::load(&dir);
         let net = Arc::new(Net {
             dir,
             store: Mutex::new(store),
@@ -180,6 +185,7 @@ impl Net {
             live: Mutex::default(),
             rates: Mutex::default(),
             notify,
+            nmos,
         });
         if migrated {
             net.save(&[File::Switches]);
@@ -191,6 +197,7 @@ impl Net {
         multicast::start(&net);
         multicast::spawn_services(net.clone());
         notify::spawn(net.clone());
+        nmos::spawn(net.clone());
         let online: Vec<String> = net.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).switches.iter().filter(|s| s.online).map(|s| s.id.clone()).collect();
         for id in online {
             net.start_live(&id);

@@ -93,6 +93,9 @@ interface AlertRules {         // defaults
   drift: Rule;                 // on            a new switch / inventory difference (those there when the VLAN setup is first read are not new)
   neighbours: Rule;            // off           a CDP / LLDP neighbour appeared or disappeared (compared with the previous read)
   poe: Rule;                   // on, 85        PoE power used above `value` % of the budget (PoE switches only)
+  ptpMute: Rule;               // on, 60        a device behind a PTP master port stopped sending Delay_Req: the port's received
+                               //               PTP counter has not moved for more than `value` s (15..3600) while the link is up,
+                               //               after it moved at least once (switches with CISCO-PTP-MIB only)
 }
 
 // Switches saved before port groups ({copper, sfp, naming, sfpNaming}) are migrated when loaded to
@@ -160,7 +163,43 @@ interface SwitchInfo {         // an online switch's slow reads (strata_net::swi
           ports: (InfoPort & { adminOn: boolean; on: boolean; status: 'disabled' | 'searching' | 'delivering' | 'fault' | 'test' | 'otherFault' | 'unknown';
                                class?: number; watts?: number })[] };   // absent: no PoE; port "g/p" when not matched to an interface
   links: { n: number; switchId: string; port: number }[];   // neighbours that are another inventory switch, not linked yet (see link-neighbours)
+  ptp?: PtpSwitch;             // the switch's PTP clock (CISCO-PTP-MIB, read every 15 s); absent: not read or no PTP
 }
+
+type PtpPortState = 'initializing' | 'faulty' | 'disabled' | 'listening' | 'preMaster' | 'master' | 'passive' | 'uncalibrated' | 'slave' | 'unknown';
+interface PtpSwitch {          // the main clock: the one with a slave port, else the one with the most ports
+  at: number;                  // last PTP read (unix ms)
+  domain: number;
+  clockType: 'ordinary' | 'boundary' | 'transparent' | 'boundaryNode' | 'other';
+  identity?: string;           // "70:69:5A:FF:FE:EE:6F:79" (default DS)
+  twoStep?: boolean;
+  stepsRemoved?: number;       // current DS
+  offsetNs?: number;           // offset from the master (the correction), ns
+  meanPathDelayNs?: number;
+  parent?: string; parentPort?: number;   // the master port it follows (parent DS)
+  gm?: { identity: string; name?: string; ip?: string /* inventory address whose MAC the identity holds (EUI-64) */;
+         priority1?: number; priority2?: number; clockClass?: number; clockAccuracy?: number; accuracyNs?: number /* none beyond the IEEE table */ };
+  servo?: 'freerun' | 'holdover' | 'acquiring' | 'frequencyLocked' | 'phaseAligned';
+  slave?: InfoPort;
+  corrections: [number, number][];   // [unix ms, offsetNs] at each read, oldest first, ≤ 60
+  ports: PtpPort[];            // every clock's ports: slave first, then masters, others, disabled
+}
+interface PtpPort extends InfoPort {   // InfoPort: from the MIB's ifIndex, else the interface named like the PTP port
+  number: number;              // PTP port number
+  domain: number;
+  state: PtpPortState;
+  logAnnounce?: number; logSync?: number; logDelayReq?: number;   // log2 s (port DS; logMinDelayReqInterval)
+  announceTimeout?: number; delayMech?: 'e2e' | 'p2p' | 'disabled';
+  rxPs?: number; txPs?: number;   // PTP packets a second, every kind, between the last two reads (absent: first read, no
+                                  // counter, or a counter that went back). A master port receives the Delay_Req of the device behind it.
+  activity?: 'active' | 'none' | 'mute';   // master ports, from the second read: received packets (active), never since
+                                           // watched (none), stopped after some (mute)
+  muteSince?: number;          // mute: the read that last saw the counter move (unix ms)
+  device?: string;             // what is plugged: "<switch> · <port>" (inventory peer, or an LLDP name that is an inventory
+                               // switch), the inventory host's name (else IP; else an NMOS node of that IP), the LLDP name, the
+                               // inventory address (else NMOS node) of one of ≤ 3 learnt MACs, the port label
+  deviceIp?: string;
+  peerSwitch?: string;         // the port leads to this inventory switch
 
 interface PortHistory {        // GET …/ports/{n}/history
   from: number; to: number;    // the range (unix ms)
@@ -210,7 +249,8 @@ interface Format {             // every field optional
 
 // ── Multicast flows (GET /api/multicast/flows) ──
 interface Attach { switchId: string; switchName: string; n?: number; port: string /* interface name */;
-                   edge: boolean /* not a switch link, an aggregate member or a trunk */; via: 'inventory' | 'macTable' }
+                   edge: boolean /* not a switch link, an aggregate member or a trunk */;
+                   via: 'inventory' | 'macTable' | 'lldp' /* lldp: a switch's LLDP / CDP neighbour, or the NMOS node's attached_network_device */ }
 interface Receiver {           // a port of an IGMP snooping entry (or a multicast router port of its VLAN)
   switchId: string; switchName: string; n?: number; port: string; vlan: number;
   label?: string;              // the port's inventory label
@@ -260,14 +300,24 @@ interface Flow {
   pairState?: 'ok' | 'missing';  // missing: a leg is not live, or a Red/Blue-named stream has no other leg
   pairBy?: 'sdp' | 'name';
   leg?: 'a' | 'b';             // a: Red / Rouge / A / 1 / primary; b: Blue / Bleu / B / 2 / secondary
+  origins: ('nmos' | 'sap' | 'igmp')[];   // in that order: an NMOS sender's SDP, a SAP announcement, switches' snooping / routers' tables
+  nmos?: { senderId: string; sender: string /* label */; nodeId?: string; node?: string /* label */;
+           inventory: boolean /* the node's addresses or MACs are in the inventory */; active?: boolean /* subscription.active */ };
+  idle?: true;                 // an NMOS sender turned off (active false) and nothing else says it is sent: not live, no 'gone'
+  subscribers?: { id: string; label: string; node?: string /* inventory name, else node label */; at?: Attach;
+                  igmp: boolean /* a snooping receiver is on the same port: counted once */ }[];   // NMOS receivers set to its sender
 }
 interface PtpClock {           // a clock that sends Announce (224.0.1.129:320)
   ip: string; domain: number;
   clock: string;               // the sender's clock identity
+  port: number;                // the sender's PTP port number
   gm: string;                  // the grandmaster it announces
   priority1: number; clockClass: number; clockAccuracy: number; accuracyNs?: number; variance: number; priority2: number;
   stepsRemoved: number; timeSource: 'atomic' | 'gps' | 'radio' | 'ptp' | 'ntp' | 'handSet' | 'other' | 'internalOscillator' | 'unknown';
   utcOffset: number; firstSeen: number; lastSeen: number; count: number; rate: number /* announces a second */;
+  logAnnounce?: number;        // its Announce interval (log2 s, header logMessageInterval)
+  logSync?: number;            // of its Sync / Follow_Up (absent until heard)
+  logDelayReq?: number;        // the minimum Delay_Req interval of its Delay_Resp (absent until heard)
   name?: string;               // inventory name of its IP
   role: 'gm' | 'backup' | 'boundary';   // gm: best of its domain (BMCA) among those heard in the last 10 s
   live: boolean;               // heard in the last 10 s
@@ -278,6 +328,35 @@ interface PtpDevice {          // a device that sends Delay_Req (224.0.1.129:319
   clock: string; ip: string; domain: number; firstSeen: number; lastSeen: number; count: number;
   name?: string; mac?: string /* inventory, ARP, else from an EUI-64 clock identity */; live: boolean /* 30 s */;
   wrongDomain: boolean; at?: Attach;
+}
+interface PtpPlace { switchId: string; switchName: string; n?: number; port: string }
+interface PtpGrandmaster {     // the grandmaster: the dataset the best Announce carries (`via: 'ptp'`), else a switch's
+                               // parent dataset (`via: 'snmp'`); never the sender's address
+  identity: string; name?: string; ip?: string;   // inventory address whose MAC the identity holds (EUI-64)
+  domain: number; priority1?: number; priority2?: number; clockClass?: number; clockAccuracy?: number; accuracyNs?: number;
+  timeSource?: string; live: boolean; via: 'ptp' | 'snmp';
+  at?: PtpPlace;               // the slave port of the switch that follows it directly, else where its MAC is learnt
+  portState?: PtpPortState;    // that slave port's state (SNMP)
+  path: PtpPlace[];            // from the switch of the talker up to it: each switch's slave port
+}
+interface PtpTalker {          // the sender of the best Announce: what this machine hears
+  clock: string; port: number; ip: string; name?: string; domain: number; stepsRemoved: number;
+  role: 'gm' | 'boundary';     // gm: it is the grandmaster (its identity, 0 steps)
+  live: boolean; logAnnounce?: number; logSync?: number; logDelayReq?: number;
+  at?: PtpPlace;               // snmp: the switch whose clock identity it is, port of the Announce's port number;
+                               // ip: the switch with its address, port where this machine is plugged; mac: a boundary sender
+                               // not read, the switch where this machine's MAC is learnt
+  via?: 'snmp' | 'ip' | 'mac';
+  state?: PtpPortState;
+}
+interface PtpTreeNode {        // grandmaster, switches (parent: the slave port's inventory peer, else the switch whose identity
+                               // its parent DS names, else the grandmaster; loops cut), devices on master ports
+  id: string;                  // "gm", "s:<switch id>", "d:<switch id>:<ptp port>", "talker"
+  kind: 'gm' | 'switch' | 'device' | 'clock';   // clock: the sender when no switch is read
+  name: string; parent?: string;
+  link: 'ok' | 'idle' | 'bad' | 'unknown';   // idle: no Delay_Req; bad: silent or another domain; unknown: guessed
+  port?: string;               // switch: its slave port; device: the master port
+  offsetNs?: number; activity?: 'active' | 'none' | 'mute'; clockType?: string; clockClass?: number; timeSource?: string; domain?: number;
 }
 interface GmChange { at: number; domain: number; from?: string; to?: string; fromIp?: string; toIp?: string }   // identities; absent = none
 interface McastRange { id: string; cidr: string /* "239.10.1.0/24", /16 to /32, inside 224.0.0.0/4 */; usage: string; vlan?: number }
@@ -302,22 +381,29 @@ interface Flows {
     outside: { used: number; reserved: number; conflicts: number; groups: GroupUse[] };   // « hors plan »
     reservations: Reservation[];
   };
-  ptp: { gm?: PtpClock; domain?: number /* main domain */; clocks: PtpClock[] /* BMCA order */; devices: PtpDevice[];
-         changes: GmChange[] /* newest first, ≤ 50 */ };
+  ptp: { gm?: PtpClock /* the best clock heard: the clock that talks to this machine, not always the grandmaster */;
+         domain?: number /* main domain */; clocks: PtpClock[] /* BMCA order */; devices: PtpDevice[];
+         changes: GmChange[] /* newest first, ≤ 50 */;
+         grandmaster?: PtpGrandmaster; talker?: PtpTalker;
+         switchSync: { switchId: string; switchName: string; clockType: string; slave?: InfoPort; offsetNs?: number;
+                       meanPathDelayNs?: number; stepsRemoved?: number; history: number[] /* offsets, oldest first */ }[];
+         ports: (PtpPort & { switchId: string; switchName: string; strata: boolean /* this machine's port */ })[];
+                               // master ports of the switches read that face a device (not a switch link)
+         tree: PtpTreeNode[] };
   flood: { iface: string; enabled: boolean /* floodWatch */; available: boolean; error?: string; at: number /* last sample */;
            groups: string[] /* flooded then */; vlan?: number };
   rules: McastRules;
   check: { enabled: boolean /* checkEnabled */; maxMbps: number };
 }
 
-interface Service { kind: string /* NDI, Dante, AES67 / RAVENNA, NMOS, Web… */; name: string; host: string; ip?: string; port: number; txt: string[] }
+interface Service { kind: string /* NDI, Dante, AES67 / RAVENNA, NMOS, NMOS Query, Web… */; name: string; host: string; ip?: string; port: number; txt: string[] }
 
 interface Alert {
   id: string; at: number;
   kind: 'newHost' | 'hostGone' | 'ipConflict' | 'vlanMismatch' | 'watchDown' | 'watchUp'
       // switch alerts (online switches, rules of the switch):
       | 'portDown' | 'portFlap' | 'portErrors' | 'portDiscards' | 'portSaturated' | 'configDrift' | 'opticLow'
-      | 'psuFault' | 'fanFault' | 'tempHigh' | 'poeBudget' | 'neighbourNew' | 'neighbourGone'
+      | 'psuFault' | 'fanFault' | 'tempHigh' | 'poeBudget' | 'ptpMute' | 'neighbourNew' | 'neighbourGone'
       // multicast alerts (McastRules):
       | 'streamGone' | 'noReceivers' | 'groupConflict' | 'flooding' | 'pairMissing' | 'ptpGmChange' | 'ptpDomain';
   ip: string; networkId?: string;   // switch alerts: the switch's IP, else its agent's IP, else 0.0.0.0
@@ -329,7 +415,8 @@ interface Alert {
 }
 // Switch alert details: portDown: the port label; configDrift: "<switch fact> / <inventory fact>";
 // opticLow: the interface name when not a faceplate port; psuFault / fanFault: "<name> · <switch's state>";
-// tempHigh: the sensor name; poeBudget: "<used> / <budget> W"; neighbourNew / Gone: "<remote name> <remote port>"
+// tempHigh: the sensor name; poeBudget: "<used> / <budget> W"; ptpMute: the device's name (limit: the rule's seconds);
+// neighbourNew / Gone: "<remote name> <remote port>"
 // (prefixed by "<interface> · " when not a faceplate port). Others: empty.
 // Multicast alert details (ip: the source, else the group; flooding: the interface's address; PTP: the device):
 // streamGone / noReceivers: "<group>:<port> <name>"; groupConflict: "<group> from <ip> and <ip>";
@@ -356,6 +443,40 @@ interface NotificationSettings {   // admin only; secrets sent masked "•••
 // teams: {"text": <lines joined by blank lines>}; slack: {"text": <lines>};
 // generic: {"alerts": [{kind, at, switchId, switchName, port, ip, detail, value, limit}]} (absent fields null).
 // Test message: same shapes; generic sends {"test": true, "text", "alerts": []}.
+
+interface NmosSettings {       // admin only
+  enabled: boolean;
+  url: string;                 // the Query API as typed: "http://10.1.1.20:8010" or "…/x-nmos/query/v1.3" (trailing / removed)
+  version: 'v1.2' | 'v1.3';    // read: <url up to /x-nmos/query>/x-nmos/query/<version>
+  refresh: 'live' | '60s';     // live: polled every 5 s (no Query API subscription: nothing is created on the registry)
+}
+interface NmosStatus {
+  enabled: boolean; url: string /* the Query API read, '' when off */; version: string; refresh: 'live' | '60s';
+  registry?: string;           // its mDNS instance name (same address and port), else its host
+  backup?: string;             // another Query API found by mDNS
+  at: number;                  // last good read (0: none); its data stay in use while the registry does not answer
+  tried: number; error?: string;   // last try and its error ("nmos: …", see the routes)
+  nodes: number; devices: number; senders: number; video: number /* flow format video, else SDP */;
+  receivers: number; subscribed: number /* subscription.sender_id set, active not false */;
+  unknown: number;             // nodes (in the last read) none of whose addresses or MACs the inventory knows
+  withoutSdp: number;          // senders whose SDP could not be read: not in the flows
+}
+interface NmosNode {           // GET /api/nmos/nodes, present ones first, by label
+  id: string; label: string; hostname?: string;
+  maker?: string;              // "Cobalt · BIDI4": asset tags (BCP-002-02) manufacturer and product, of the node else of its devices
+  ip?: string;                 // its API endpoint (else href) address, else a media address
+  ips: string[];               // API and media addresses (sources of its senders' SDPs)
+  name?: string;               // its name in the inventory
+  senders: number; receivers: number;
+  at: Attach[];                // the switch ports it is on, most certain first
+  inventory: boolean;
+  seen: number; present: boolean;   // last read it was in; nodes that left stay 10 min with present false
+}
+interface NmosFound {          // a Query API found by mDNS (_nmos-query._tcp)
+  name: string; host: string; ip?: string; port: number;
+  url: string;                 // "<api_proto>://<ip>:<port>/x-nmos/query/<v1.3, else v1.2 when api_ver only has it>"
+  priority?: number /* TXT pri */; proto: string /* TXT api_proto */; versions: string[] /* TXT api_ver */;
+}
 
 interface SnmpRow {            // raw SNMP explorer
   oid: string;                 // dotted
@@ -411,9 +532,15 @@ interface SnmpRow {            // raw SNMP explorer
 | `GET /api/multicast/reservations` · `POST` | `Reservation` | 409 "this group is already reserved"; history "reserved group" |
 | `PUT /api/multicast/reservations/{group}` · `DELETE` | `{name}` → `Reservation` · 204 | 404 "no such reservation"; history "changed reservation" / "released group" |
 | `GET /api/multicast/rules` · `PUT` | `McastRules` | history "changed multicast alert rules" |
-| `GET /api/multicast/sdp/{group}/{port}` | → `application/sdp` text | the last SAP announcement; 404 "no such sdp" |
+| `GET /api/multicast/sdp/{group}/{port}` | → `application/sdp` text | the last SAP announcement, else the SDP of the NMOS sender of that group and port; 404 "no such sdp" |
 | `PUT /api/multicast/options` | `{checkEnabled?, floodWatch?}` → 204 | admin; stored in multicast.json (`checkEnabled` default false, `floodWatch` default true); history "changed multicast settings" |
 | `GET /api/services` | → `{at: number, services: Service[]}` | mDNS; `changed: services` |
+| `GET /api/nmos` | → `NmosSettings` | admin; `changed: nmos` |
+| `PUT /api/nmos` | `NmosSettings` → `NmosSettings` | admin; reads at once; 400 "the nmos version is v1.2 or v1.3", "the nmos refresh is live or 60s", "the registry address cannot be empty" (enabled), "the registry address is written http://host:port"; history "changed nmos settings" (detail "on · <url> · v1.3 · live") |
+| `POST /api/nmos/test` | `{url?, version?}` (default: the saved ones) → `{url, nodes, devices, senders, receivers, ms}` | admin; one read of nodes, devices, senders, receivers (GET, paged); 400 as `PUT`; 502 + "nmos: timed out" / "nmos: unknown host" / "nmos: tls failed" / "nmos: cannot reach the registry" / "nmos: the registry answered <status>" / "nmos: not a query api" (not a JSON array) / "nmos: the answer is too big" / "nmos: bad url" |
+| `GET /api/nmos/discovered` | → `{at, registries: NmosFound[]}` | admin; preferred first (`pri`, then name); asks the network again (mDNS, 3 s) when the last answers are older than 60 s |
+| `GET /api/nmos/status` | → `NmosStatus` | `changed: nmos` (after each read) |
+| `GET /api/nmos/nodes` | → `NmosNode[]` | `changed: nmos`; `[]` when off or never read |
 | `POST /api/services/browse` | → 202 | one question per service type, answers for 3 s |
 | `GET /api/alerts` | → `Alert[]` (newest first, ≤ 500) | `changed: alerts` |
 | `POST /api/alerts/seen` | `{ids: string[] \| null}` (null = all) → 204 | |
@@ -490,6 +617,44 @@ WebSocket, besides `changed`:
     switches they were on are still read; `groupConflict`; `flooding` (per interface and VLAN); `pairMissing` (a live
     leg whose pair is missing); `ptpGmChange`; `ptpDomain` (a live clock or device not in the main domain). Conditions
     must hold 15 s, then are raised once until they clear; transitions (`streamGone`, `ptpGmChange`) at once.
+- **NMOS** (`net/nmos.rs`, `net/mflows/registry.rs`): read only, HTTP GET and nothing else — no registration, no
+  IS-05 connection, no Query API subscription (WebSocket), never a write to the registry or a node.
+  - *Reads*: while `enabled`, every 5 s (`live`) or 60 s, and at once after `PUT /api/nmos`: `nodes`, `devices`,
+    `sources`, `flows`, `senders`, `receivers` of the Query API, each from `?paging.since=0:0&paging.limit=500`
+    following `Link: rel="next"` (else `X-Paging-Until`) until a page is empty, shorter than `X-Paging-Limit`, or
+    brings no new id (200 pages at most); a registry that answers 400 to the paging parameters is asked without them
+    (everything at once). 3 s to connect, 10 s a request, no proxy, 64 MB at most. Items without `id` are skipped;
+    every field is optional (a missing or mistyped one is ignored). One resource that fails fails the read: the
+    last good read stays in use (`error` set) until the next good one.
+  - *SDP*: each sender's `manifest_href` (http/https only, GET, 256 kB) is read when the sender is new or its
+    `version` or `manifest_href` changed, else kept; a failed read is tried again after 60 s; 8 at once at most.
+    Parsed as the SAP SDPs (`strata_net::mcast::parse_sdp`): multicast medias, format, `estBps`, `a=group:DUP`.
+  - *Flows*: each multicast media of a sender's SDP is merged into the flow of the same group and port (same source
+    first, else one without source; a different source makes another flow, then a conflict), else makes a new flow
+    (origin `nmos`, `announced`: the registry announces it). Name: the hand label, else the group label, else the
+    sender's label (the SAP name stays in `sapName`); format, encoding, kind (flow format), `estBps` from the SDP when
+    not known. An SDP with two medias (ST 2022-7) gives two flows paired by `a=group:DUP` (`pairBy: 'sdp'`).
+  - *Liveness*: an NMOS flow is live when its sender is in the registry and not turned off (`subscription.active`
+    not false; absent before v1.2), or when SAP / packets / tables say so. A sender in the registry but turned off
+    with nothing else is `idle`: not live (`state: 'off'`), no `gone` issue, and no `streamGone` alert when it goes
+    idle — only a sender that leaves the registry (or a SAP stream that stops) is gone. While the registry does not
+    answer, the last read is kept (no alert). Turning NMOS off or changing its address starts the alert watcher
+    again (as a new multicast interface does).
+  - *Receivers*: an NMOS receiver whose `subscription.sender_id` is the flow's sender (and `active` not false) is a
+    subscriber; when a snooping receiver is on one of its node's ports, they are one receiver (`igmp`, named after
+    the node when the port has no inventory host); `receiverCount` adds the subscribers not in the snooping tables;
+    the path goes to their switches too. The `noReceivers` alert still reads the snooping tables only.
+  - *Nodes* (where they are plugged, in this order): the inventory switch port of one of their addresses (API
+    endpoints and `href`, and the sources of their senders' SDPs); a switch's LLDP / CDP neighbour (edge ports only)
+    whose chassis ID is one of the node's interface MACs (`chassis_id` / `port_id`), whose address is one of the
+    node's, or whose name is the node's host name or label (host part, case ignored); the v1.3
+    `attached_network_device` (its chassis ID as another inventory switch's neighbour table names that switch, its
+    `port_id` the same interface as a port, `Ethernet1/12` = `Eth1/12`); the switches' MAC tables (the node's MACs,
+    and the MACs of its addresses from the inventory or the routers' ARP tables). `inventory`: one of its addresses
+    is an inventory address, or one of its MACs an inventory address's MAC. An emitter without inventory name takes
+    its node's name, without port its node's port for that address (or its only port).
+  - *mDNS*: `_nmos-query._tcp` (kind "NMOS Query") with the other service types (`POST /api/services/browse`, every
+    10 min); `_nmos-register._tcp` services are not offered (only Query APIs are read).
 - **Online switches** (read-only SNMP v2c): a task per online switch reads the interfaces' state and 64-bit counters
   every `onlineSecs` (also at server start for the switches saved online), the identity (system group, ENTITY-MIB
   chassis) and the VLAN setup (Q-BRIDGE-MIB) every 5 min. Interfaces are matched to the faceplate ports by name
@@ -501,6 +666,29 @@ WebSocket, besides `changed`:
 - **Slow reads of an online switch** (`strata_net::switchinfo::all`, read-only GET/GETNEXT/GETBULK, same SNMP session
   kind as the live reads): when it goes online, then every 60 s. Interfaces are mapped to the faceplate through the
   live reads (ifIndex → port), the other interfaces keep their name (`port-channel1`).
+- **PTP of an online switch** (`strata_net::switchinfo::ptp` + `strata_net::ptpmib`, read-only walks of CISCO-PTP-MIB
+  ciscoPtpMIBClockInfo `1.3.6.1.4.1.9.9.760.1.2`): with the first slow read, then every 15 s while the switch has a
+  PTP clock (else again with each slow read). Tables (entry `.1`, index domain.clockType.instance[.portNumber]):
+  3 default DS (4 twoStep, 5 identity, 6/7 priorities, 8 slaveOnly, 9 class, 10 accuracy), 9 port running (5 name,
+  6 state, 8 ifIndex, 13/14 packets received/sent, Counter64), 1 current DS (4 stepsRemoved, 5 offsetFromMaster,
+  6 meanPathDelay), 2 parent DS (4 parent port identity, 8 GM identity, 9/10 GM priorities, 11 GM class, 12 GM
+  accuracy), 4 running (4 servo state), 5 time properties (11 time source), 8 port DS (5 name, 6 port identity,
+  7 logAnnounceInterval, 8 announceReceiptTimeout, 9 logSyncInterval, 10 logMinDelayReqInterval, 12 delay
+  mechanism); 7 port table only for names when 8 and 9 give none. Tables 3 and 9 answering nothing: no PTP (the
+  switch tab is hidden, the multicast view keeps to what is heard). Agents that move columns: a port's name is taken
+  from any column of interface-like texts, its state from an integer column holding only 1..9, its counters from the
+  Counter columns in order (received, sent). Time intervals (ClockTimeInterval, an OCTET STRING): text in ns ("−12",
+  "6900 ns", "6.9 us"), 8 bytes of IEEE 1588 scaledNanoseconds (ns × 2^16), or an integer in ns. Identities: 8 bytes
+  (port identity 8 + 2) or hex text. Ports map to the faceplate by the ifIndex column, else by name. Between two
+  reads, the received counter of a master port gives the Delay_Req of its device (`activity`, `rxPs`); the
+  offsets of the main clock are kept (60) for the correction curve. Rule `ptpMute` checked after each PTP read.
+- **Multicast PTP view**: the best Announce heard (BMCA) is the *talker*; its grandmaster identity and dataset are the
+  grandmaster's (a boundary clock relays them: its address is not the grandmaster's). The talker is a switch when
+  a read switch has its clock identity (its port: the PTP port of the Announce's port number), or when its address is
+  an inventory switch's; a boundary sender not read is taken as the switch where this machine is plugged. Without
+  Announce, the switches' parent DS give the grandmaster (`via: 'snmp'`). The grandmaster is named by the inventory
+  address of the MAC its EUI-64 identity holds. Rows (`ports`): the master ports of the read switches that face a
+  device; the talker's port is this machine's.
 - **Neighbour switches**: a CDP / LLDP neighbour on a faceplate port is another inventory switch when its name equals
   that switch's name or its name in the switch (sysName, when it is online), host part only and case ignored, or its
   IP is the switch's IP or its agent's IP; its port is the one whose name is the same interface (`Ethernet1/1` =
@@ -545,7 +733,7 @@ WebSocket, besides `changed`:
   speed class (≥ 40 G qsfp, ≥ 10 G sfp, else rj45; a port without speed follows the one before) make a group.
 - **History**: every write route above adds an entry (`action`: "created network", "scanned", "changed port", "switch online", "switch offline",
   "changed read interval", "took config from switch", "saved switch model", "deleted switch model",
-  "changed alert rules", "linked switches", "changed notifications", "tested notification", …).
+  "changed alert rules", "linked switches", "changed notifications", "tested notification", "changed nmos settings", …).
 - **Notifications**: every alert raised (`Net::alert`, `Net::switch_alert`) is queued without waiting (1000 at most,
   more are dropped and logged). Alerts of the kinds of `filter` are grouped: the first opens a window of `groupSecs`,
   every alert raised before its end goes in the same message, one message per enabled channel (e-mail, each enabled
@@ -553,5 +741,5 @@ WebSocket, besides `changed`:
   logged, not retried. Messages go to the mail server and the webhook URLs only.
 - **SNMP explorer**: read-only (GET and GETBULK, never SET), the agent's v2c or v3 session.
 - Storage (`multicast.json` also keeps `groupLabels`, `ranges`, `reservations`, `rules`, `ptpChanges`, `checkEnabled`, `floodWatch`): `<data>/network/{networks,addresses,vlans,switches,snmp,multicast,alerts,history,templates}.json`
-  (`templates.json`: the user switch models), `<data>/network/notifications.json` (`NotificationSettings`, unmasked; 0600 like `snmp.json`) and `<data>/network/rates/<switchId>.json` (rate history), atomic writes;
+  (`templates.json`: the user switch models), `<data>/network/notifications.json` (`NotificationSettings`, unmasked; 0600 like `snmp.json`), `<data>/network/nmos.json` (`NmosSettings`) and `<data>/network/rates/<switchId>.json` (rate history), atomic writes;
   history kept 1 year, alerts 500 newest.

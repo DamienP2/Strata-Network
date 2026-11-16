@@ -343,6 +343,8 @@ pub struct AlertRules {
     pub neighbours: Rule,
     /// PoE power used above `value` % of the budget.
     pub poe: Rule,
+    /// A device behind a PTP master port stopped sending Delay_Req for more than `value` seconds (link up).
+    pub ptp_mute: Rule,
 }
 
 impl Default for AlertRules {
@@ -358,6 +360,7 @@ impl Default for AlertRules {
             drift: rule(true, 0.0),
             neighbours: rule(false, 0.0),
             poe: rule(true, 85.0),
+            ptp_mute: rule(true, 60.0),
         }
     }
 }
@@ -372,6 +375,7 @@ impl AlertRules {
         self.saturation.value = self.saturation.value.clamp(1.0, 100.0);
         self.health.value = self.health.value.clamp(20.0, 150.0);
         self.poe.value = self.poe.value.clamp(1.0, 100.0);
+        self.ptp_mute.value = self.ptp_mute.value.round().clamp(15.0, 3600.0);
     }
 }
 

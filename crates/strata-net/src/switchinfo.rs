@@ -1243,6 +1243,30 @@ async fn poe_in(c: &Ctx<'_>) -> io::Result<Option<Poe>> {
     Ok(Some(out))
 }
 
+// ── PTP ──
+
+/// The PTP clocks of the switch and their ports (CISCO-PTP-MIB, see
+/// [`crate::ptpmib`]); empty when the switch does not implement the MIB (or has
+/// no PTP clock). The default dataset and the port running table are walked
+/// first: neither answering means no PTP, and nothing else is asked.
+pub async fn ptp(s: &Session) -> io::Result<Vec<crate::ptpmib::PtpClockMib>> {
+    use crate::ptpmib::{self as pm, Rows};
+    let mut tables: BTreeMap<u32, Rows> = BTreeMap::new();
+    for t in pm::TABLES {
+        let rows = column(s, &format!("{}.{t}.1", pm::CLOCK_INFO), ROWS).await?;
+        tables.insert(t, rows);
+        if t == 9 && tables.values().all(Vec::is_empty) {
+            return Ok(Vec::new());
+        }
+    }
+    // Names nowhere in 8 and 9: the port table may have them.
+    let named = |t: u32| tables.get(&t).is_some_and(|r| r.iter().any(|(i, v)| i.first() == Some(&5) && matches!(v, Value::Bytes(b) if !b.is_empty())));
+    if !named(8) && !named(9) {
+        tables.insert(pm::PORT_TABLE, column(s, &format!("{}.{}.1", pm::CLOCK_INFO, pm::PORT_TABLE), ROWS).await?);
+    }
+    Ok(pm::parse(&tables))
+}
+
 // ── All ──
 
 /// Every part, one after the other (gentle on the switch CPU), the shared

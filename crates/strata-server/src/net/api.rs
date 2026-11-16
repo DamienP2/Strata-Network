@@ -58,6 +58,7 @@ pub fn router() -> Router<Shared> {
         .route("/api/alerts/seen", post(alerts_seen))
         .route("/api/history", get(history))
         .merge(super::notify::router())
+        .merge(super::nmos::router())
         .merge(super::explore::router())
 }
 

@@ -1,7 +1,8 @@
 //! Online switches, slow reads: CDP / LLDP neighbours, optics, IGMP snooping,
 //! health, aggregates, spanning tree and PoE (`strata_net::switchinfo`, read-only
-//! SNMP) every minute; the alert rules of the switch; the neighbour switches not
-//! yet linked in the inventory.
+//! SNMP) every minute, PTP (CISCO-PTP-MIB) every 15 s when the switch has it;
+//! the alert rules of the switch; the neighbour switches not yet linked in the
+//! inventory.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::Ipv4Addr;
@@ -13,6 +14,7 @@ use strata_net::switchinfo::{self as si, PoeStatus, Proto, StpState, SwitchInfo}
 
 use super::live::{Diff, LivePort};
 use super::model::{AlertRules, PortRef, Switch, SwitchPort};
+use super::ptpsw::{self, AddrInfo, Names, NmosNode, PtpMem, PtpSwitchV, SwitchPtpIn};
 use super::snmp::session;
 use super::{File, Net};
 use crate::paths::now_ms;
@@ -35,6 +37,8 @@ pub struct InfoMem {
     pub error: Option<String>,
     /// (unix ms, CPU %).
     pub cpu: VecDeque<(i64, f32)>,
+    /// The PTP reads.
+    pub ptp: PtpMem,
 }
 
 // ── The view sent to the clients ──
@@ -215,6 +219,9 @@ pub struct InfoView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub poe: Option<PoeV>,
     pub links: Vec<LinkV>,
+    /// The switch's PTP clock and ports (absent: no PTP data).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ptp: Option<PtpSwitchV>,
 }
 
 fn stp_name(s: StpState) -> &'static str {
@@ -252,7 +259,7 @@ impl Ifs {
         Ifs { names: names.clone(), ports: ports.iter().map(|p| (p.if_index, p.n)).collect() }
     }
 
-    fn port(&self, i: u32) -> PortV {
+    pub fn port(&self, i: u32) -> PortV {
         PortV { n: self.ports.get(&i).copied(), port: self.names.get(&i).cloned().unwrap_or_else(|| format!("if{i}")) }
     }
 }
@@ -624,6 +631,21 @@ pub fn check_info(w: &mut Watch, rules: &AlertRules, info: &SwitchInfo, ifs: &If
     out
 }
 
+/// The rule on a PTP read: a device behind a master port silent for too long while its link is up.
+pub fn check_ptp(w: &mut Watch, rules: &AlertRules, view: Option<&PtpSwitchV>, ports: &[LivePort], now_ms: i64) -> Vec<Raise> {
+    let mut pass = Pass::new(w);
+    if let Some(v) = view {
+        let up = |n: u16| ports.iter().any(|p| p.n == n && p.up);
+        for (n, device) in ptpsw::mutes(v, up, f64::from(rules.ptp_mute.value), now_ms) {
+            let key = format!("ptpmute:{n}");
+            if rules.ptp_mute.on {
+                pass.hit(key, raise("ptpMute", Some(n), device, None, Some(f64::from(rules.ptp_mute.value))));
+            }
+        }
+    }
+    pass.finish(&["ptpmute:"])
+}
+
 // ── Reading ──
 
 impl Net {
@@ -638,14 +660,106 @@ impl Net {
     }
 
     async fn info_loop(self: Arc<Self>, id: String) {
+        let mut next_full = Instant::now();
         loop {
             let online = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).switches.iter().any(|s| s.id == id && s.online);
             if !online || !self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(&id) {
                 break;
             }
-            self.read_info(&id).await;
-            tokio::time::sleep(EVERY).await;
+            let full = Instant::now() >= next_full;
+            // PTP every 15 s once the switch has shown it has some, else with the slow reads.
+            let has_ptp = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&id).is_some_and(|r| r.info.ptp.present == Some(true));
+            if full || has_ptp {
+                self.read_ptp(&id).await;
+            }
+            if full {
+                next_full = Instant::now() + EVERY;
+                self.read_info(&id).await;
+            } else if has_ptp {
+                self.send_info(&id);
+            }
+            tokio::time::sleep(Duration::from_secs(ptpsw::EVERY_SECS)).await;
         }
+    }
+
+    /// Reads the switch's PTP clock (CISCO-PTP-MIB); raises the silent devices.
+    async fn read_ptp(self: &Arc<Self>, id: &str) {
+        let agent = {
+            let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let sw = st.switches.iter().find(|s| s.id == id);
+            sw.and_then(|sw| sw.snmp.as_deref()).and_then(|a| st.snmp.iter().find(|x| x.id == a)).cloned()
+        };
+        let Some(agent) = agent else { return };
+        let result = match session(&agent).await {
+            Ok(s) => si::ptp(&s).await.map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        let now = now_ms();
+        {
+            let mut map = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(r) = map.get_mut(id) else { return };
+            match result {
+                Ok(clocks) => r.info.ptp.update(clocks, now),
+                Err(e) => {
+                    tracing::debug!("ptp read of {id}: {e}");
+                    r.info.ptp.error = Some(e);
+                    return;
+                }
+            }
+        }
+        let Some(sw) = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).switches.iter().find(|s| s.id == id).cloned() else { return };
+        let view = self.ptp_view_of(id);
+        let raised = {
+            let mut map = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(r) = map.get_mut(id) else { return };
+            let ports = r.live.ports.clone();
+            check_ptp(&mut r.watch, &sw.rules, view.as_ref(), &ports, now)
+        };
+        self.raise_switch(&sw, raised);
+    }
+
+    /// The inventory as the PTP views name things: every switch, addresses (name, MAC), NMOS nodes.
+    fn ptp_names(&self) -> (Vec<Switch>, HashMap<Ipv4Addr, AddrInfo>, Vec<NmosNode>) {
+        let nmos: Vec<NmosNode> = self
+            .nmos
+            .registry()
+            .map(|r| r.nodes.iter().map(|n| NmosNode { label: n.label.clone(), ips: n.ips.clone(), macs: n.macs.clone() }).collect())
+            .unwrap_or_default();
+        let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let addrs = st
+            .addresses
+            .values()
+            .map(|a| (a.ip, AddrInfo { name: Some(a.label.clone()).filter(|l| !l.is_empty()).or_else(|| a.name.clone()), mac: a.mac.clone() }))
+            .collect();
+        (st.switches.clone(), addrs, nmos)
+    }
+
+    /// The PTP view of one online switch.
+    pub fn ptp_view_of(&self, id: &str) -> Option<PtpSwitchV> {
+        let (switches, addrs, nmos) = self.ptp_names();
+        let sw = switches.iter().find(|s| s.id == id)?;
+        let names = Names { switches: &switches, addresses: &addrs, nmos: &nmos };
+        let map = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let r = map.get(id)?;
+        ptpsw::switch_view(&r.info.ptp, sw, &Ifs::of(r.names(), &r.live.ports), &names)
+    }
+
+    /// The PTP views of every online switch that has PTP data.
+    pub fn ptp_views(&self) -> Vec<SwitchPtpIn> {
+        let (switches, addrs, nmos) = self.ptp_names();
+        let names = Names { switches: &switches, addresses: &addrs, nmos: &nmos };
+        let map = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut out: Vec<SwitchPtpIn> = switches
+            .iter()
+            .filter(|s| s.online)
+            .filter_map(|sw| {
+                let r = map.get(&sw.id)?;
+                let view = ptpsw::switch_view(&r.info.ptp, sw, &Ifs::of(r.names(), &r.live.ports), &names)?;
+                Some(SwitchPtpIn { id: sw.id.clone(), name: sw.name.clone(), ip: sw.ip, view })
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
     }
 
     async fn read_info(self: &Arc<Self>, id: &str) {
@@ -719,6 +833,7 @@ impl Net {
             .map(|(o, agent_ip)| Other { id: &o.id, name: &o.name, ip: o.ip, agent_ip: *agent_ip, sysname: sysnames.get(&o.id).cloned(), ports: &o.ports })
             .collect();
         view.links = link_candidates(&sw, &view.neighbours, &others);
+        view.ptp = self.ptp_view_of(id);
         Some(view)
     }
 
@@ -994,4 +1109,45 @@ mod tests {
         let taken = Other { id: "c", name: "SW-Core-01", ip: None, agent_ip: None, sysname: None, ports: &core.ports };
         assert!(link_candidates(&s, &v.neighbours, &[taken]).is_empty());
     }
+
+    #[test]
+    fn ptp_mute_rule() {
+        use super::super::ptpsw::PtpPortV;
+        let port = |n: u16, activity: Option<&'static str>, since: Option<i64>| PtpPortV {
+            at: PortV { n: Some(n), port: format!("Ethernet1/{n}") },
+            number: u32::from(n),
+            domain: 127,
+            state: "master",
+            log_announce: None,
+            log_sync: None,
+            log_delay_req: None,
+            announce_timeout: None,
+            delay_mech: None,
+            rx_ps: None,
+            tx_ps: None,
+            activity,
+            mute_since: since,
+            device: Some(format!("dev-{n}")),
+            device_ip: None,
+            peer_switch: None,
+        };
+        let v = PtpSwitchV { ports: vec![port(1, Some("mute"), Some(0)), port(2, Some("active"), None), port(3, Some("none"), None), port(4, Some("mute"), Some(0))], ..PtpSwitchV::default() };
+        let rules = AlertRules::default();
+        let mut w = Watch::default();
+        // Port 4's link is down: not raised.
+        let ports = vec![lp(1, true, 0, 0), lp(2, true, 0, 0), lp(3, true, 0, 0), lp(4, false, 0, 0)];
+        assert!(check_ptp(&mut w, &rules, Some(&v), &ports, 30_000).is_empty());
+        let r = check_ptp(&mut w, &rules, Some(&v), &ports, 61_000);
+        assert_eq!(r.iter().map(|x| (x.kind, x.port, x.detail.as_str(), x.limit)).collect::<Vec<_>>(), vec![("ptpMute", Some(1), "dev-1", Some(60.0))]);
+        // Once until it clears.
+        assert!(check_ptp(&mut w, &rules, Some(&v), &ports, 75_000).is_empty());
+        let back = PtpSwitchV { ports: vec![port(1, Some("active"), None)], ..PtpSwitchV::default() };
+        assert!(check_ptp(&mut w, &rules, Some(&back), &ports, 90_000).is_empty());
+        assert_eq!(check_ptp(&mut w, &rules, Some(&v), &ports, 105_000).len(), 1);
+        // Rule off: nothing.
+        let mut off = rules.clone();
+        off.ptp_mute.on = false;
+        assert!(check_ptp(&mut Watch::default(), &off, Some(&v), &ports, 105_000).is_empty());
+    }
+
 }

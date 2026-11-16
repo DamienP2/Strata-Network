@@ -1162,6 +1162,42 @@ tr.open .exp svg { transform: rotate(180deg); }
 .mn.gmnode .ic { background: rgba(34, 197, 94, 0.15); color: var(--pvw); }
 .dom { font: 600 10.5px var(--mono); padding: 0 6px; border-radius: 9px; background: var(--panel-3); color: var(--text-2); }
 .dom.bad { background: rgba(245, 165, 36, 0.15); color: var(--warn); }
+/* PTP : grandmaster, horloge qui parle à ce serveur, synchronisation, états des ports */
+.gmcards { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 12px; }
+.gmcards .hcard > b { font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.gm b { font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm .badge-gm { flex: none; font: 600 10.5px var(--mono); padding: 1px 6px; border-radius: 10px; background: rgba(34, 197, 94, 0.15); color: var(--pvw); }
+.gm .badge-gm.bk { background: var(--panel-3); color: var(--text-2); }
+.bigid { font: 600 13px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ptpst { font: 600 11px var(--mono); padding: 1px 7px; border-radius: 10px; white-space: nowrap; }
+.ptpst.m { background: var(--accent-soft); color: var(--accent-2); }
+.ptpst.s { background: rgba(34, 197, 94, 0.14); color: var(--pvw); }
+.ptpst.p { background: var(--panel-3); color: var(--text-2); }
+.ptpst.d { background: var(--panel-3); color: var(--text-3); }
+.ivl { font: 11.5px var(--mono); }
+.ivl.w { color: var(--warn); cursor: help; }
+.corr { display: inline-flex; align-items: center; gap: 8px; }
+.corr svg { color: var(--pvw); flex: none; }
 .sdp-box { margin: 0; max-height: 50vh; overflow: auto; padding: 10px 12px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); font: 11.5px/1.5 var(--mono); color: var(--text-2); white-space: pre; user-select: text; }
 .modal.dialog:has(.sdp-box) { width: min(680px, 100%); }
 @media (max-width: 1500px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } .kv { grid-template-columns: repeat(2, 100px minmax(0, 1fr)); } }
+/* NMOS : origine des flux, registre, nœuds */
+.srcb { display: inline-block; font: 600 10.5px var(--mono); padding: 1px 6px; border-radius: 9px; background: var(--panel-3); color: var(--text-2); margin-right: 3px; }
+.srcb.nmos { background: rgba(34, 197, 94, 0.14); color: var(--pvw); }
+.srcb.sap { background: var(--accent-soft); color: var(--accent-2); }
+.srcb.igmp { background: rgba(245, 165, 36, 0.14); color: var(--warn); }
+.lib-nav-item .srcb { flex: none; margin-right: 0; }
+.kpis.reg { grid-template-columns: minmax(0, 1.2fr) repeat(5, minmax(0, 1fr)); }
+.kpis.reg .kpi .v { font-size: 20px; }
+.kpis.reg .kpi .v.name { font-size: 15px; }
+.nmos-found { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px dashed color-mix(in srgb, var(--pvw) 45%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--pvw) 9%, var(--panel)); font-size: 12.5px; min-width: 0; }
+.nmos-found > svg { color: var(--pvw); flex: none; }
+.nmos-found .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nmos-found .btn { flex: none; }
+.alive { display: inline-flex; align-items: center; gap: 6px; font: 11.5px var(--mono); }
+.alive i { width: 7px; height: 7px; border-radius: 50%; background: var(--pvw); box-shadow: 0 0 6px var(--pvw); }
+.alive.off i { background: var(--text-3); box-shadow: none; }
+.alive.w i { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+.info-bar .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1500px) { .kpis.reg { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

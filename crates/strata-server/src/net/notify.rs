@@ -542,6 +542,7 @@ pub fn kind_label(kind: &str) -> &str {
         "fanFault" => "Ventilateur",
         "tempHigh" => "Température",
         "poeBudget" => "Budget PoE",
+        "ptpMute" => "Appareil PTP muet",
         "neighbourNew" => "Nouveau voisin",
         "neighbourGone" => "Voisin disparu",
         "streamGone" => "Flux arrêté",
@@ -583,6 +584,7 @@ pub fn detail_fr(a: &Alert) -> String {
         "opticLow" => [a.detail.clone(), format!("Rx {}\u{a0}dBm (seuil {})", dec(v, 1), dec(lim, 1))].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" · "),
         "tempHigh" => format!("{} · {}\u{a0}°C (seuil {}\u{a0}°C)", a.detail, dec(v, 1), dec(lim, 0)),
         "poeBudget" => format!("{}\u{a0}% du budget (seuil {}\u{a0}%)", dec(v, 1), dec(lim, 0)),
+        "ptpMute" => [a.detail.clone(), format!("aucun Delay_Req depuis plus de {}\u{a0}s", dec(lim, 0))].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" · "),
         _ => a.detail.replace(" and ", " et "),
     }
 }
@@ -908,6 +910,7 @@ mod tests {
         a.limit = Some(10.0);
         assert_eq!(detail_fr(&a), "20 paquets/s pendant 1\u{a0}min (seuil 10)");
         assert_eq!(kind_label("portDiscards"), "Rejets");
+        assert_eq!(kind_label("ptpMute"), "Appareil PTP muet");
         a.kind = "configDrift".into();
         a.detail = "access VLAN 10 / VLAN 20".into();
         assert_eq!(detail_fr(&a), "switch\u{a0}: access VLAN 10 · inventaire\u{a0}: VLAN 20");

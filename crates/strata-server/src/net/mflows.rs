@@ -27,6 +27,8 @@ use crate::api::{bad, not_found, require, status, ApiResult, Session};
 use crate::paths::{new_id, now_ms};
 use crate::state::Shared;
 
+pub mod registry;
+
 // ── Stored in multicast.json ──
 
 /// What multicast.json keeps besides the interface, the check limit and the stream labels.
@@ -194,6 +196,8 @@ pub struct SwitchData {
     pub router: Vec<(u16, Vec<PortAt>)>,
     /// Faceplate member → aggregate name.
     pub lag_of: HashMap<u16, String>,
+    /// LLDP / CDP neighbours on its ports (slow read).
+    pub neighbours: Vec<(PortAt, strata_net::switchinfo::PortNeighbour)>,
 }
 
 /// An address of the inventory.
@@ -221,6 +225,10 @@ pub struct Input {
     pub flood: FloodStatus,
     pub iface_ip: Option<Ipv4Addr>,
     pub check_max_mbps: u64,
+    /// The PTP views of the online switches that have PTP (CISCO-PTP-MIB).
+    pub ptp_switches: Vec<super::ptpsw::SwitchPtpIn>,
+    /// The last read of the NMOS registry (when turned on).
+    pub nmos: Option<Arc<super::nmos::Registry>>,
 }
 
 // ── What the clients get ──
@@ -389,6 +397,17 @@ pub struct Flow {
     /// The other leg named by the SDP.
     #[serde(skip)]
     pub dup: Option<strata_net::mcast::Leg>,
+    /// Where it is known from: "nmos" (registry), "sap", "igmp" (switches' tables), in that order.
+    pub origins: Vec<&'static str>,
+    /// Its NMOS sender.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nmos: Option<registry::NmosRef>,
+    /// An NMOS sender turned off (`subscription.active` false) and nothing else says it is sent: not live, not gone.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub idle: bool,
+    /// NMOS receivers subscribed to its sender.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subscribers: Vec<registry::Subscriber>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -521,6 +540,9 @@ pub struct PtpView {
     pub devices: Vec<PtpDevice>,
     /// Newest first.
     pub changes: Vec<GmChange>,
+    /// The grandmaster told apart from the clock that talks to this machine, the switches' PTP, the tree.
+    #[serde(flatten)]
+    pub sync: super::ptpsw::PtpSync,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -679,6 +701,8 @@ pub fn pair_flows(flows: &[Flow]) -> Vec<Option<(usize, &'static str, &'static s
             .filter(|j| names[*j].as_ref().is_some_and(|(b, l, fam)| b == base && fam == family && l != leg))
             .filter(|j| signature(&flows[*j]) == signature(&flows[i]))
             .filter(|j| flows[*j].group != flows[i].group || flows[*j].vlan != flows[i].vlan || flows[*j].source != flows[i].source)
+            // Two NMOS senders are two streams: a 2022-7 pair is one sender with two medias (paired by its SDP).
+            .filter(|j| flows[*j].nmos.is_none() || flows[i].nmos.is_none())
             .collect();
         let j = match cands.len() {
             0 => continue,
@@ -1002,9 +1026,19 @@ pub fn build(inp: &Input) -> FlowsView {
                 pair_by: None,
                 leg: None,
                 dup: s.dup.clone(),
+                origins: if s.announced { vec!["sap"] } else { Vec::new() },
+                nmos: None,
+                idle: false,
+                subscribers: Vec::new(),
             }
         })
         .collect();
+
+    // Senders of the NMOS registry.
+    let nmos = inp.nmos.as_deref().map(|r| registry::Index::new(r, &cx));
+    if let Some(idx) = &nmos {
+        registry::merge_senders(&mut flows, idx, &cx);
+    }
 
     // Receivers from the snooping tables.
     let mut known: Vec<(Ipv4Addr, Option<u16>)> = flows.iter().map(|f| (f.group, f.vlan)).collect();
@@ -1061,6 +1095,10 @@ pub fn build(inp: &Input) -> FlowsView {
             pair_by: None,
             leg: None,
             dup: None,
+            origins: vec!["igmp"],
+            nmos: None,
+            idle: false,
+            subscribers: Vec::new(),
         });
     }
 
@@ -1123,14 +1161,23 @@ pub fn build(inp: &Input) -> FlowsView {
                 }
             }
         }
-        f.receiver_count = f.receivers.iter().filter(|r| !r.router && r.peer.is_none()).count();
+        if snooped.contains_key(&u32::from(f.group)) || f.routed {
+            registry::add_origin(f, "igmp");
+        }
+        if let Some(idx) = &nmos {
+            registry::subscribers(f, idx);
+        }
+        f.receiver_count = f.receivers.iter().filter(|r| !r.router && r.peer.is_none()).count() + f.subscribers.iter().filter(|s| !s.igmp).count();
         // Emitter and path.
         if let Some(ip) = f.source {
             let mac = cx.mac_of(ip);
             let at = cx.locate(Some(ip), mac.as_deref());
             f.emitter = Some(Emitter { ip, name: cx.addr_name(ip), mac, at });
         }
-        let mut to: Vec<String> = f.receivers.iter().map(|r| r.switch_id.clone()).collect();
+        if let Some(idx) = &nmos {
+            registry::emitter(f, idx);
+        }
+        let mut to: Vec<String> = f.receivers.iter().map(|r| r.switch_id.clone()).chain(f.subscribers.iter().filter_map(|s| s.at.as_ref().map(|a| a.switch_id.clone()))).collect();
         to.sort();
         to.dedup();
         if let Some(at) = f.emitter.as_ref().and_then(|e| e.at.as_ref()) {
@@ -1177,7 +1224,7 @@ pub fn build(inp: &Input) -> FlowsView {
         if f.live && f.receiver_count == 0 && inp.switches.iter().any(|s| s.read) {
             add_issue(f, "noReceivers");
         }
-        if !f.live {
+        if !f.live && !f.idle {
             add_issue(f, "gone");
         }
         f.state = if !f.live {
@@ -1332,10 +1379,37 @@ fn ptp_view(cx: &Ctx) -> PtpView {
             PtpDevice { device: f.clone(), name: cx.addr_name(f.ip), mac, live: now.saturating_sub(f.last_seen) <= 30_000, wrong_domain: domain.is_some_and(|d| d != f.domain), at }
         })
         .collect();
-    let gm = best.and_then(|b| clocks.iter().find(|c| c.clock.ip == b.ip && c.clock.clock == b.clock).cloned());
+    let gm = best.as_ref().and_then(|b| clocks.iter().find(|c| c.clock.ip == b.ip && c.clock.clock == b.clock).cloned());
     let mut changes = inp.more.ptp_changes.clone();
     changes.reverse();
-    PtpView { gm, domain, clocks, devices, changes }
+    let sync = ptp_sync(cx, best.as_ref());
+    PtpView { gm, domain, clocks, devices, changes, sync }
+}
+
+/// The grandmaster, the clock that talks to this machine, the switches' PTP (`net/ptpsw.rs`).
+fn ptp_sync(cx: &Ctx, best: Option<&ptp::Announcer>) -> super::ptpsw::PtpSync {
+    use super::ptpsw::{Place, SyncIn};
+    let inp = cx.inp;
+    let place = |a: Attach| Place { switch_id: a.switch_id, switch_name: a.switch_name, n: a.n, port: a.port };
+    let gm_identity = best.map(|b| b.gm.clone()).or_else(|| inp.ptp_switches.iter().find_map(|s| s.view.gm.as_ref().map(|g| g.identity.clone())));
+    let gm_mac = gm_identity.as_deref().and_then(ptp::identity_mac);
+    let gm_addr = gm_mac.as_deref().and_then(|m| {
+        let mut v: Vec<(&Ipv4Addr, &Addr)> = inp.addresses.iter().filter(|(_, a)| a.mac.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(m))).collect();
+        v.sort_by_key(|(ip, _)| u32::from(**ip));
+        v.first().map(|(ip, a)| (**ip, a.name.clone()))
+    });
+    let inventory: Vec<(String, String, Option<Ipv4Addr>, Option<Ipv4Addr>)> = inp.switches.iter().map(|s| (s.id.clone(), s.name.clone(), s.ip, None)).collect();
+    let live = best.is_some_and(|b| inp.now.saturating_sub(b.last_seen) <= ptp::ANNOUNCE_STALE_MS);
+    super::ptpsw::sync_view(&SyncIn {
+        talker: best.map(|b| (b, live)),
+        switches: &inp.ptp_switches,
+        inventory: &inventory,
+        talker_name: best.and_then(|b| cx.addr_name(b.ip)),
+        strata_at: inp.iface_ip.and_then(|ip| cx.locate(Some(ip), cx.mac_of(ip).as_deref())).map(place),
+        gm_at: gm_mac.as_deref().and_then(|m| cx.locate(gm_addr.as_ref().map(|a| a.0), Some(m))).map(place),
+        gm_name: gm_addr.as_ref().map(|a| a.1.clone().unwrap_or_else(|| a.0.to_string())),
+        gm_ip: gm_addr.map(|a| a.0),
+    })
 }
 
 // ── Gathering what the computation reads ──
@@ -1387,15 +1461,18 @@ impl Net {
                 sw.snoop = d.mcast_groups.iter().map(|g| Snoop { vlan: g.vlan, group: g.group, mac: g.mac, ports: g.ports.iter().map(at).collect() }).collect();
                 sw.router = d.mcast_router_ports.iter().map(|(v, p)| (*v, p.iter().map(at).collect())).collect();
                 sw.lag_of = d.lags.iter().filter_map(|(m, a)| Some((*ifs.ports.get(m)?, ifs.names.get(a).cloned().unwrap_or_else(|| format!("if{a}"))))).collect();
+                sw.neighbours = d.neighbours.iter().map(|nb| (at(&nb.if_index), nb.clone())).collect();
             }
         }
         inp.arp = self.snmp_arp();
+        inp.ptp_switches = self.ptp_views();
         if let Some(e) = self.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
             inp.streams = e.snapshot();
             inp.ptp = e.ptp();
             inp.flood = e.flood_status();
             inp.iface_ip = Some(e.iface());
         }
+        inp.nmos = self.nmos.registry();
         inp
     }
 
@@ -1489,6 +1566,10 @@ pub fn evaluate(w: &mut Watch, v: &FlowsView, generation: u64, now: u64) -> (Vec
         let (g, rest) = key.split_once(':').unwrap_or_default();
         let port = rest.split(':').next().unwrap_or_default();
         if live_now.iter().any(|k| k.starts_with(&format!("{g}:{port}:"))) {
+            continue;
+        }
+        // An NMOS sender turned off is idle, not gone.
+        if v.flows.iter().any(|f| &f.key == key && f.idle) {
             continue;
         }
         if rules.stream_gone {
@@ -1869,7 +1950,9 @@ async fn set_options(State(s): State<Shared>, me: Session, Json(o): Json<McastOp
 
 async fn sdp(State(s): State<Shared>, _me: Session, Path((group, port)): Path<(String, u16)>) -> ApiResult<impl IntoResponse> {
     let g = group_arg(&group)?;
-    let text = s.net.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().and_then(|e| e.sdp(g, port)).ok_or_else(|| not_found("sdp"))?;
+    let sap = s.net.mcast.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().and_then(|e| e.sdp(g, port));
+    // Else the SDP of the NMOS sender.
+    let text = sap.or_else(|| s.net.nmos.sdp_text(g, port)).ok_or_else(|| not_found("sdp"))?;
     Ok(([(header::CONTENT_TYPE, "application/sdp; charset=utf-8")], text))
 }
 

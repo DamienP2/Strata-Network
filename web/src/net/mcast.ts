@@ -1,6 +1,6 @@
 import { locale, t } from '../i18n';
 import { fmtBps } from './model';
-import type { StreamKind } from './types';
+import type { PtpPort, PtpPortState, StreamKind } from './types';
 
 /* Types de GET /api/multicast/flows (docs/api-network.md § Multicast flows). */
 
@@ -32,7 +32,7 @@ export interface Attach {
   n?: number;
   port: string;
   edge: boolean;
-  via: 'inventory' | 'macTable';
+  via: 'inventory' | 'macTable' | 'lldp';
 }
 
 export interface Receiver {
@@ -57,6 +57,15 @@ export interface PathNode {
   ingress?: string;
   igmpPorts: number;
   receivers: number;
+}
+
+/** Un récepteur NMOS abonné à l'émetteur du flux. */
+export interface Subscriber {
+  id: string;
+  label: string;
+  node?: string;
+  at?: Attach;
+  igmp: boolean;
 }
 
 export type Issue = 'unannounced' | 'noReceivers' | 'pairMissing' | 'conflict' | 'flooded' | 'gone';
@@ -103,12 +112,17 @@ export interface Flow {
   pairState?: 'ok' | 'missing';
   pairBy?: 'sdp' | 'name';
   leg?: 'a' | 'b';
+  origins: ('nmos' | 'sap' | 'igmp')[];
+  nmos?: { senderId: string; sender: string; nodeId?: string; node?: string; inventory: boolean; active?: boolean };
+  idle?: boolean;
+  subscribers?: Subscriber[];
 }
 
 export interface PtpClock {
   ip: string;
   domain: number;
   clock: string;
+  port: number;
   gm: string;
   priority1: number;
   clockClass: number;
@@ -123,11 +137,91 @@ export interface PtpClock {
   lastSeen: number;
   count: number;
   rate: number;
+  logAnnounce?: number;
+  logSync?: number;
+  logDelayReq?: number;
   name?: string;
   role: 'gm' | 'backup' | 'boundary';
   live: boolean;
   wrongDomain: boolean;
   at?: Attach;
+}
+
+/** Un port de switch. */
+export interface PtpPlace {
+  switchId: string;
+  switchName: string;
+  n?: number;
+  port: string;
+}
+
+export interface PtpGrandmaster {
+  identity: string;
+  name?: string;
+  ip?: string;
+  domain: number;
+  priority1?: number;
+  priority2?: number;
+  clockClass?: number;
+  clockAccuracy?: number;
+  accuracyNs?: number;
+  timeSource?: string;
+  live: boolean;
+  via: 'ptp' | 'snmp';
+  at?: PtpPlace;
+  portState?: PtpPortState;
+  /** Du switch de ce serveur jusqu'au grandmaster : le port esclave de chaque switch. */
+  path: PtpPlace[];
+}
+
+/** L'horloge qui envoie les Announce entendus ici. */
+export interface PtpTalker {
+  clock: string;
+  port: number;
+  ip: string;
+  name?: string;
+  domain: number;
+  stepsRemoved: number;
+  role: 'gm' | 'boundary';
+  live: boolean;
+  logAnnounce?: number;
+  logSync?: number;
+  logDelayReq?: number;
+  at?: PtpPlace;
+  via?: 'snmp' | 'ip' | 'mac';
+  state?: PtpPortState;
+}
+
+export interface PtpSwitchSync {
+  switchId: string;
+  switchName: string;
+  clockType: string;
+  slave?: { n?: number; port: string };
+  offsetNs?: number;
+  meanPathDelayNs?: number;
+  stepsRemoved?: number;
+  history: number[];
+}
+
+export interface PtpPortRow extends PtpPort {
+  switchId: string;
+  switchName: string;
+  strata: boolean;
+}
+
+export interface PtpTreeNode {
+  id: string;
+  kind: 'gm' | 'switch' | 'device' | 'clock';
+  name: string;
+  parent?: string;
+  link: 'ok' | 'idle' | 'bad' | 'unknown';
+  port?: string;
+  offsetNs?: number;
+  activity?: 'active' | 'none' | 'mute';
+  clockType?: string;
+  clockClass?: number;
+  timeSource?: string;
+  domain?: number;
 }
 
 export interface PtpDevice {
@@ -205,7 +299,18 @@ export interface Flows {
   switches: { id: string; name: string; ip?: string; online: boolean; read: boolean; at: number }[];
   links: { a: string; b: string; aPort: string; bPort: string }[];
   plan: { ranges: RangeView[]; outside: { used: number; reserved: number; conflicts: number; groups: GroupUse[] }; reservations: Reservation[] };
-  ptp: { gm?: PtpClock; domain?: number; clocks: PtpClock[]; devices: PtpDevice[]; changes: GmChange[] };
+  ptp: {
+    gm?: PtpClock;
+    domain?: number;
+    clocks: PtpClock[];
+    devices: PtpDevice[];
+    changes: GmChange[];
+    grandmaster?: PtpGrandmaster;
+    talker?: PtpTalker;
+    switchSync: PtpSwitchSync[];
+    ports: PtpPortRow[];
+    tree: PtpTreeNode[];
+  };
   flood: { iface: string; enabled: boolean; available: boolean; error?: string; at: number; groups: string[]; vlan?: number };
   check: { enabled: boolean; maxMbps: number };
 }

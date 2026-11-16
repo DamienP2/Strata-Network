@@ -22,6 +22,7 @@ pub const TYPES: &[(&str, &str)] = &[
     ("_ravenna._sub._http._tcp.local", "RAVENNA"),
     ("_nmos-node._tcp.local", "NMOS"),
     ("_nmos-register._tcp.local", "NMOS"),
+    ("_nmos-query._tcp.local", "NMOS Query"),
     ("_http._tcp.local", "Web"),
     ("_ipp._tcp.local", "Printer"),
     ("_smb._tcp.local", "SMB"),

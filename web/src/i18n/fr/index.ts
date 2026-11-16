@@ -9,5 +9,7 @@ import { errors } from './errors';
 import { network } from './network';
 import { notify } from './notify';
 import { multicast } from './multicast';
+import { nmos } from './nmos';
+import { ptp } from './ptp';
 
-export const fr: Record<string, string> = { ...common, ...shell, ...login, ...users, ...system, ...security, ...updates, ...errors, ...network, ...notify, ...multicast };
+export const fr: Record<string, string> = { ...common, ...shell, ...login, ...users, ...system, ...security, ...updates, ...errors, ...network, ...notify, ...multicast, ...nmos, ...ptp };
