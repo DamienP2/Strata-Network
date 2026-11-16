@@ -286,6 +286,7 @@ export const ALERT_KINDS: AlertKind[] = [
   'portDown',
   'portFlap',
   'portErrors',
+  'portDiscards',
   'portSaturated',
   'configDrift',
   'opticLow',
@@ -324,6 +325,8 @@ export function alertLabel(k: AlertKind): string {
       return t('Unstable port');
     case 'portErrors':
       return t('Port errors');
+    case 'portDiscards':
+      return t('Port discards');
     case 'portSaturated':
       return t('Saturated port');
     case 'configDrift':
@@ -369,6 +372,7 @@ export const ALERT_TONE: Record<AlertKind, string> = {
   portDown: 'bad',
   portFlap: '',
   portErrors: 'ptp',
+  portDiscards: 'bad',
   portSaturated: 'ptp',
   configDrift: 'ptp',
   opticLow: 'ptp',
@@ -433,6 +437,8 @@ export function alertDetail(a: Alert): string {
       return tn(v, '{n} drop in 10 min', '{n} drops in 10 min', { n: dec(v, 0) });
     case 'portErrors':
       return t('{n} per minute (limit {limit})', { n: dec(v, 0), limit: dec(lim, 0) });
+    case 'portDiscards':
+      return t('{n} packets/s for 1 min (limit {limit})', { n: dec(v), limit: dec(lim) });
     case 'portSaturated':
       return t('{n} % for 1 min (limit {limit} %)', { n: dec(v), limit: dec(lim, 0) });
     case 'configDrift': {

@@ -329,6 +329,8 @@ pub struct AlertRules {
     pub flap: Rule,
     /// More than `value` errors per minute on a port.
     pub errors: Rule,
+    /// More than `value` discarded packets a second (in + out) on a port, over 1 minute.
+    pub discards: Rule,
     /// Optical receive power below `value` dBm.
     pub optic_rx: Rule,
     /// Port load above `value` % for 1 minute.
@@ -349,6 +351,7 @@ impl Default for AlertRules {
             link_down: rule(true, 0.0),
             flap: rule(true, 3.0),
             errors: rule(true, 100.0),
+            discards: rule(true, 10.0),
             optic_rx: rule(true, -10.0),
             saturation: rule(true, 90.0),
             health: rule(true, 60.0),
@@ -364,6 +367,7 @@ impl AlertRules {
     pub fn clamp(&mut self) {
         self.flap.value = self.flap.value.round().clamp(1.0, 1000.0);
         self.errors.value = self.errors.value.round().clamp(1.0, 1e9);
+        self.discards.value = ((self.discards.value * 10.0).round() / 10.0).clamp(0.1, 1e9);
         self.optic_rx.value = self.optic_rx.value.clamp(-40.0, 10.0);
         self.saturation.value = self.saturation.value.clamp(1.0, 100.0);
         self.health.value = self.health.value.clamp(20.0, 150.0);

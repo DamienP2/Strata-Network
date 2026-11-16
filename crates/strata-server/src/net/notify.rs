@@ -534,6 +534,7 @@ pub fn kind_label(kind: &str) -> &str {
         "portDown" => "Lien coupé",
         "portFlap" => "Port instable",
         "portErrors" => "Erreurs",
+        "portDiscards" => "Rejets",
         "portSaturated" => "Port saturé",
         "configDrift" => "Écart de config",
         "opticLow" => "Optique faible",
@@ -573,6 +574,7 @@ pub fn detail_fr(a: &Alert) -> String {
     match a.kind.as_str() {
         "portFlap" => format!("{} coupure{} en 10\u{a0}min", dec(v, 0), if v >= 2.0 { "s" } else { "" }),
         "portErrors" => format!("{} par minute (seuil {})", dec(v, 0), dec(lim, 0)),
+        "portDiscards" => format!("{} paquets/s pendant 1\u{a0}min (seuil {})", dec(v, 1), dec(lim, 1)),
         "portSaturated" => format!("{}\u{a0}% pendant 1\u{a0}min (seuil {}\u{a0}%)", dec(v, 1), dec(lim, 0)),
         "configDrift" => {
             let (sw, inv) = a.detail.split_once(" / ").unwrap_or((&a.detail, ""));
@@ -901,6 +903,11 @@ mod tests {
         a.value = Some(95.26);
         a.limit = Some(90.0);
         assert_eq!(detail_fr(&a), "95,3\u{a0}% pendant 1\u{a0}min (seuil 90\u{a0}%)");
+        a.kind = "portDiscards".into();
+        a.value = Some(20.0);
+        a.limit = Some(10.0);
+        assert_eq!(detail_fr(&a), "20 paquets/s pendant 1\u{a0}min (seuil 10)");
+        assert_eq!(kind_label("portDiscards"), "Rejets");
         a.kind = "configDrift".into();
         a.detail = "access VLAN 10 / VLAN 20".into();
         assert_eq!(detail_fr(&a), "switch\u{a0}: access VLAN 10 · inventaire\u{a0}: VLAN 20");

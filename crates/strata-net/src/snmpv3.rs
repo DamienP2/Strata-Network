@@ -12,7 +12,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use tokio::net::UdpSocket;
 
-use crate::snmp::{int, parse_pdu, pdu_bytes, read_int, tlv, Oid, Reader, Value};
+use crate::snmp::{bulk_pdu_bytes, int, parse_pdu, pdu_bytes, read_int, tlv, Oid, Reader, Value};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -340,14 +340,14 @@ impl V3Session {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn ask(&self, sock: &UdpSocket, agent: SocketAddr, pdu: u8, oids: &[Oid], max_rep: i64, timeout: Duration, retries: u32) -> io::Result<Vec<(Oid, Value)>> {
+    pub async fn ask(&self, sock: &UdpSocket, agent: SocketAddr, pdu: u8, oids: &[Oid], (non_rep, max_rep): (i64, i64), timeout: Duration, retries: u32) -> io::Result<Vec<(Oid, Value)>> {
         let mut resynced = false;
         let mut buf = vec![0u8; 65_535];
         let mut attempt = 0;
         'send: while attempt <= retries {
             attempt += 1;
             let id = rand::random::<i32>() & 0x7FFF_FFFF;
-            let msg = self.build(id, &pdu_bytes(pdu, id, oids, max_rep));
+            let msg = self.build(id, &bulk_pdu_bytes(pdu, id, oids, non_rep, max_rep));
             sock.send_to(&msg, agent).await?;
             let deadline = tokio::time::Instant::now() + timeout;
             while let Ok(r) = tokio::time::timeout_at(deadline, sock.recv_from(&mut buf)).await {

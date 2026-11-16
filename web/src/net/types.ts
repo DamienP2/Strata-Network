@@ -136,6 +136,7 @@ export interface AlertRules {
   linkDown: Rule;
   flap: Rule;
   errors: Rule;
+  discards: Rule;
   opticRx: Rule;
   saturation: Rule;
   health: Rule;
@@ -232,9 +233,12 @@ export interface PortHistory {
   from: number;
   to: number;
   stepSecs: number;
-  points: { at: number; in: number; out: number; inPeak?: number; outPeak?: number }[];
+  /** b/s; discards in packets/s; 24 h / 7 d: bucket average + peak. */
+  points: { at: number; in: number; out: number; inPeak?: number; outPeak?: number; inDiscards: number; outDiscards: number; inDiscardsPeak?: number; outDiscardsPeak?: number }[];
   in: { avg: number; peak: number };
   out: { avg: number; peak: number };
+  inDiscards: { avg: number; peak: number };
+  outDiscards: { avg: number; peak: number };
 }
 
 export interface LivePort {
@@ -247,6 +251,12 @@ export interface LivePort {
   outBps: number;
   inErrors: number;
   outErrors: number;
+  /** Discarded packets since the switch started. */
+  inDiscards: number;
+  outDiscards: number;
+  /** Discarded packets a second (last reading). */
+  inDiscardsPps: number;
+  outDiscardsPps: number;
   alias: string;
   inHistory: number[];
   outHistory: number[];
@@ -340,6 +350,7 @@ export type AlertKind =
   | 'portDown'
   | 'portFlap'
   | 'portErrors'
+  | 'portDiscards'
   | 'portSaturated'
   | 'configDrift'
   | 'opticLow'

@@ -162,8 +162,13 @@ pub fn request(community: &str, pdu: u8, id: i32, oids: &[Oid], max_rep: i64) ->
 
 /// A PDU (GET 0xA0, GETNEXT 0xA1, GETBULK 0xA5 with max repetitions).
 pub(crate) fn pdu_bytes(pdu: u8, id: i32, oids: &[Oid], max_rep: i64) -> Vec<u8> {
+    bulk_pdu_bytes(pdu, id, oids, 0, max_rep)
+}
+
+/// A PDU; for GETBULK the first `non_rep` OIDs are non-repeaters (one GETNEXT each).
+pub(crate) fn bulk_pdu_bytes(pdu: u8, id: i32, oids: &[Oid], non_rep: i64, max_rep: i64) -> Vec<u8> {
     let binds: Vec<u8> = oids.iter().flat_map(|o| tlv(0x30, &[oid(o), vec![0x05, 0]].concat())).collect();
-    let (a, b) = if pdu == 0xA5 { (0, max_rep) } else { (0, 0) };
+    let (a, b) = if pdu == 0xA5 { (non_rep, max_rep) } else { (0, 0) };
     tlv(pdu, &[int(i64::from(id)), int(a), int(b), tlv(0x30, &binds)].concat())
 }
 
@@ -322,11 +327,15 @@ impl Session {
     }
 
     async fn ask(&self, pdu: u8, oids: &[Oid], max_rep: i64) -> io::Result<Vec<(Oid, Value)>> {
+        self.ask_nr(pdu, oids, 0, max_rep).await
+    }
+
+    async fn ask_nr(&self, pdu: u8, oids: &[Oid], non_rep: i64, max_rep: i64) -> io::Result<Vec<(Oid, Value)>> {
         if let Some(v3) = &self.v3 {
-            return v3.ask(&self.sock, self.agent, pdu, oids, max_rep, self.timeout, self.retries).await;
+            return v3.ask(&self.sock, self.agent, pdu, oids, (non_rep, max_rep), self.timeout, self.retries).await;
         }
         let id = rand::random::<i32>() & 0x7FFF_FFFF;
-        let req = request(&self.community, pdu, id, oids, max_rep);
+        let req = tlv(0x30, &[int(1), tlv(0x04, self.community.as_bytes()), bulk_pdu_bytes(pdu, id, oids, non_rep, max_rep)].concat());
         let mut buf = vec![0u8; 65_535];
         for _ in 0..=self.retries {
             self.sock.send_to(&req, self.agent).await?;
@@ -383,6 +392,34 @@ impl Session {
         }
         Ok(out)
     }
+
+    /// Every cell under `base` (at most `limit`), each with the cell that follows `stamp`
+    /// read in the same GETBULK as a non-repeater, so both come from one moment of the
+    /// agent (`stamp` = `1.3.6.1.2.1.1.3`: sysUpTime.0). The stamp is None when the agent
+    /// did not answer it.
+    pub async fn walk_stamped(&self, base: &Oid, limit: usize, stamp: &Oid) -> io::Result<Vec<(Oid, Value, Option<Value>)>> {
+        let mut out = Vec::new();
+        let mut cur = base.clone();
+        while out.len() < limit {
+            let mut binds = self.ask_nr(0xA5, &[stamp.clone(), cur.clone()], 1, 25).await?.into_iter();
+            let Some((so, sv)) = binds.next() else { break };
+            let at = (so.starts_with(stamp) && !sv.is_absent()).then_some(sv);
+            let mut done = true;
+            for (o, v) in binds {
+                if !o.starts_with(base) || v == Value::EndOfView || o <= cur {
+                    done = true;
+                    break;
+                }
+                done = false;
+                cur = o.clone();
+                out.push((o, v, at.clone()));
+            }
+            if done {
+                break;
+            }
+        }
+        Ok(out)
+    }
 }
 
 // ── What is read ──
@@ -415,7 +452,9 @@ pub mod oids {
     // Interfaces (IF-MIB)
     pub const IF_ADMIN: &str = "1.3.6.1.2.1.2.2.1.7";
     pub const IF_OPER: &str = "1.3.6.1.2.1.2.2.1.8";
+    pub const IF_IN_DISCARDS: &str = "1.3.6.1.2.1.2.2.1.13"; // Counter32
     pub const IF_IN_ERRORS: &str = "1.3.6.1.2.1.2.2.1.14";
+    pub const IF_OUT_DISCARDS: &str = "1.3.6.1.2.1.2.2.1.19"; // Counter32
     pub const IF_OUT_ERRORS: &str = "1.3.6.1.2.1.2.2.1.20";
     pub const IF_HC_IN: &str = "1.3.6.1.2.1.31.1.1.1.6";
     pub const IF_HC_OUT: &str = "1.3.6.1.2.1.31.1.1.1.10";
@@ -512,9 +551,22 @@ pub struct IfStat {
     pub out_octets: u64,
     pub in_errors: u64,
     pub out_errors: u64,
+    /// Packets dropped though without error (full buffers, mostly): Counter32.
+    pub in_discards: u64,
+    pub out_discards: u64,
+    /// The switch's sysUpTime (centiseconds) when it answered this interface's
+    /// ifHCInOctets: read in the same GETBULK. None when the agent did not give it.
+    pub ticks: Option<u32>,
 }
 
-/// Every interface's state and counters (64-bit counters).
+/// The prefix whose next cell is sysUpTime.0 (a GETBULK non-repeater).
+const UPTIME_NEXT: &str = "1.3.6.1.2.1.1.3";
+
+/// Every interface's state and counters (64-bit octet counters, 32-bit errors and
+/// discards). ifHCInOctets is walked with sysUpTime.0 as a non-repeater of each
+/// GETBULK, so that rates can use the switch's own clock (`IfStat::ticks`); the
+/// other counters come in the next requests of the same read, at a near constant
+/// offset from it.
 pub async fn if_stats(s: &Session) -> io::Result<Vec<IfStat>> {
     let mut by: std::collections::BTreeMap<u32, IfStat> = std::collections::BTreeMap::new();
     for (col, base) in [
@@ -527,15 +579,28 @@ pub async fn if_stats(s: &Session) -> io::Result<Vec<IfStat>> {
         (6, oids::IF_HC_OUT),
         (7, oids::IF_IN_ERRORS),
         (8, oids::IF_OUT_ERRORS),
+        (9, oids::IF_IN_DISCARDS),
+        (10, oids::IF_OUT_DISCARDS),
     ] {
         let base = Oid::parse(base);
-        let rows = s.walk(&base, 20_000).await;
+        let rows = if col == 5 {
+            // With the switch's uptime; an agent that refuses it is read without.
+            match s.walk_stamped(&base, 20_000, &Oid::parse(UPTIME_NEXT)).await {
+                Ok(r) => Ok(r),
+                Err(_) => s.walk(&base, 20_000).await.map(|r| r.into_iter().map(|(o, v)| (o, v, None)).collect()),
+            }
+        } else {
+            s.walk(&base, 20_000).await.map(|r| r.into_iter().map(|(o, v)| (o, v, None)).collect())
+        };
         // The name column must answer; the others may be missing on small switches.
-        let rows = if col == 0 { rows? } else { rows.unwrap_or_default() };
-        for (o, v) in rows {
+        let rows: Vec<(Oid, Value, Option<Value>)> = if col == 0 { rows? } else { rows.unwrap_or_default() };
+        for (o, v, at) in rows {
             let Some(i) = o.suffix(&base).first().copied() else { continue };
             let e = by.entry(i).or_insert_with(|| IfStat { if_index: i, ..IfStat::default() });
             let n = v.as_u64().unwrap_or(0);
+            if let Some(Value::Ticks(t)) = at {
+                e.ticks = Some(t);
+            }
             match col {
                 0 => e.name = v.as_text().unwrap_or_default(),
                 1 => e.alias = v.as_text().unwrap_or_default(),
@@ -545,7 +610,9 @@ pub async fn if_stats(s: &Session) -> io::Result<Vec<IfStat>> {
                 5 => e.in_octets = n,
                 6 => e.out_octets = n,
                 7 => e.in_errors = n,
-                _ => e.out_errors = n,
+                8 => e.out_errors = n,
+                9 => e.in_discards = n,
+                _ => e.out_discards = n,
             }
         }
     }
@@ -930,5 +997,95 @@ mod tests {
         let t = arp(&s).await.unwrap();
         assert_eq!(t.len(), 2);
         assert_eq!(t[&Ipv4Addr::new(10, 0, 0, 9)], [0, 0x11, 0x32, 1, 2, 9]);
+    }
+
+    /// A loopback agent over a sorted table (values BER-encoded) answering GET and
+    /// GETBULK with non-repeaters; counts the requests.
+    async fn table_agent(table: Vec<(Oid, Vec<u8>)>) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let agent = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = agent.local_addr().unwrap().port();
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = asked.clone();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            loop {
+                let (n, from) = agent.recv_from(&mut buf).await.unwrap();
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (_, msg) = Reader { b: &buf[..n], pos: 0 }.next().unwrap();
+                let mut m = Reader { b: msg, pos: 0 };
+                m.next();
+                m.next();
+                let (tag, body) = m.next().unwrap();
+                let mut p = Reader { b: body, pos: 0 };
+                let id = read_int(p.next().unwrap().1);
+                let non_rep = read_int(p.next().unwrap().1).max(0) as usize;
+                let reps = read_int(p.next().unwrap().1).max(1) as usize;
+                let (_, vb) = p.next().unwrap();
+                let mut oids = Vec::new();
+                let mut r = Reader { b: vb, pos: 0 };
+                while let Some((_, one)) = r.next() {
+                    oids.push(read_oid(Reader { b: one, pos: 0 }.next().unwrap().1));
+                }
+                let next = |o: &Oid| table.iter().find(|(k, _)| k > o).cloned().unwrap_or((o.clone(), vec![0x82, 0]));
+                let mut out: Vec<(Oid, Vec<u8>)> = Vec::new();
+                if tag == 0xA0 {
+                    for o in &oids {
+                        out.push(table.iter().find(|(k, _)| k == o).cloned().unwrap_or((o.clone(), vec![0x81, 0])));
+                    }
+                } else {
+                    for o in &oids[..non_rep.min(oids.len())] {
+                        out.push(next(o));
+                    }
+                    let mut cur: Vec<Oid> = oids[non_rep.min(oids.len())..].to_vec();
+                    for _ in 0..reps {
+                        for c in cur.iter_mut() {
+                            let x = next(c);
+                            *c = x.0.clone();
+                            out.push(x);
+                        }
+                    }
+                }
+                let binds: Vec<u8> = out.iter().flat_map(|(o, v)| tlv(0x30, &[oid(o), v.clone()].concat())).collect();
+                let pdu = tlv(0xA2, &[int(id), int(0), int(0), tlv(0x30, &binds)].concat());
+                let _ = agent.send_to(&tlv(0x30, &[int(1), tlv(0x04, b"public"), pdu].concat()), from).await;
+            }
+        });
+        (port, asked)
+    }
+
+    #[tokio::test]
+    async fn interface_counters_with_the_switch_uptime() {
+        let uint = |tag: u8, v: u64| {
+            let b = v.to_be_bytes();
+            let first = b.iter().position(|x| *x != 0).unwrap_or(7);
+            let mut body = b[first..].to_vec();
+            if body[0] & 0x80 != 0 {
+                body.insert(0, 0);
+            }
+            tlv(tag, &body)
+        };
+        let mut table: Vec<(Oid, Vec<u8>)> = vec![(Oid::parse(oids::SYS_UPTIME), uint(0x43, 4_000_000_123))];
+        // 30 interfaces: two GETBULK pages of 25 for each column.
+        for i in 1..=30u32 {
+            let at = |base: &str| Oid::parse(base).child(i);
+            table.push((at(oids::IF_NAME), tlv(0x04, format!("Ethernet1/{i}").as_bytes())));
+            table.push((at(oids::IF_OPER), int(1)));
+            table.push((at(oids::IF_HC_IN), uint(0x46, 1_000 * u64::from(i))));
+            table.push((at(oids::IF_IN_DISCARDS), uint(0x41, u64::from(u32::MAX) - u64::from(i))));
+            table.push((at(oids::IF_OUT_DISCARDS), uint(0x41, 7)));
+        }
+        table.sort_by(|a, b| a.0.cmp(&b.0));
+        let (port, asked) = table_agent(table).await;
+        let s = Session::open(&Agent { ip: Ipv4Addr::LOCALHOST, port, community: "public".into() }, Duration::from_millis(500)).await.unwrap();
+        let st = if_stats(&s).await.unwrap();
+        assert_eq!(st.len(), 30);
+        let e = &st[29];
+        assert_eq!((e.name.as_str(), e.up, e.in_octets, e.in_discards, e.out_discards), ("Ethernet1/30", true, 30_000, u64::from(u32::MAX) - 30, 7));
+        assert!(st.iter().all(|x| x.ticks == Some(4_000_000_123)));
+        assert!(asked.load(std::sync::atomic::Ordering::SeqCst) >= 11);
+        // The stamped walk on its own: rows and the stamp of the same answer.
+        let rows = s.walk_stamped(&Oid::parse(oids::IF_HC_IN), 100, &Oid::parse("1.3.6.1.2.1.1.3")).await.unwrap();
+        assert_eq!(rows.len(), 30);
+        assert_eq!(rows[0].2, Some(Value::Ticks(4_000_000_123)));
     }
 }

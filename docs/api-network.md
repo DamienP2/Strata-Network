@@ -86,6 +86,7 @@ interface AlertRules {         // defaults
   linkDown: Rule;              // on            watched port's link down (admin up, oper down)
   flap: Rule;                  // on, 3         more than `value` link drops in 10 min (1..1000)
   errors: Rule;                // on, 100       more than `value` in+out errors per minute (≥ 1)
+  discards: Rule;              // on, 10        more than `value` in+out discarded packets a second, averaged over 1 min (0.1.., one decimal)
   opticRx: Rule;               // on, -10       optic Rx power below `value` dBm (-40..10); the optic's own thresholds are not used
   saturation: Rule;            // on, 90        max(in, out) above `value` % of the link speed for 1 min (1..100)
   health: Rule;                // on, 60        power supply or fan not ok, or a temperature above `value` °C (20..150)
@@ -127,8 +128,10 @@ interface Live {               // an online switch, in memory only (not saved)
 interface LivePort {
   n: number; ifIndex: number;
   up: boolean; adminUp: boolean; speedMbps: number;
-  inBps: number; outBps: number;           // from the counter deltas between two reads (a counter that went back is skipped)
+  inBps: number; outBps: number;           // from the counter deltas between two reads (a counter that went back is skipped; see Rates)
   inErrors: number; outErrors: number;     // since the switch started
+  inDiscards: number; outDiscards: number; // ifIn/OutDiscards since the switch started (Counter32 as read)
+  inDiscardsPps: number; outDiscardsPps: number;   // discarded packets a second, from the same two reads (to 0.01)
   alias: string;                           // port description in the switch
   inHistory: number[]; outHistory: number[];   // rates, oldest first, ≤ 60
 }
@@ -162,8 +165,10 @@ interface SwitchInfo {         // an online switch's slow reads (strata_net::swi
 interface PortHistory {        // GET …/ports/{n}/history
   from: number; to: number;    // the range (unix ms)
   stepSecs: number;            // 1h: the read interval; 24h: 300; 7d: 1800
-  points: { at: number; in: number; out: number; inPeak?: number; outPeak?: number }[];   // b/s; 24h / 7d: bucket average + peak
+  points: { at: number; in: number; out: number; inPeak?: number; outPeak?: number;     // b/s; 24h / 7d: bucket average + peak
+            inDiscards: number; outDiscards: number; inDiscardsPeak?: number; outDiscardsPeak?: number }[];   // packets/s, same
   in: { avg: number; peak: number }; out: { avg: number; peak: number };
+  inDiscards: { avg: number; peak: number }; outDiscards: { avg: number; peak: number };   // packets/s
 }
 
 interface SnmpAgent {          // read-only, SNMP v2c or v3
@@ -311,7 +316,7 @@ interface Alert {
   id: string; at: number;
   kind: 'newHost' | 'hostGone' | 'ipConflict' | 'vlanMismatch' | 'watchDown' | 'watchUp'
       // switch alerts (online switches, rules of the switch):
-      | 'portDown' | 'portFlap' | 'portErrors' | 'portSaturated' | 'configDrift' | 'opticLow'
+      | 'portDown' | 'portFlap' | 'portErrors' | 'portDiscards' | 'portSaturated' | 'configDrift' | 'opticLow'
       | 'psuFault' | 'fanFault' | 'tempHigh' | 'poeBudget' | 'neighbourNew' | 'neighbourGone'
       // multicast alerts (McastRules):
       | 'streamGone' | 'noReceivers' | 'groupConflict' | 'flooding' | 'pairMissing' | 'ptpGmChange' | 'ptpDomain';
@@ -501,14 +506,36 @@ WebSocket, besides `changed`:
   IP is the switch's IP or its agent's IP; its port is the one whose name is the same interface (`Ethernet1/1` =
   `Eth1/1`). Proposed in `links` unless the two ports are already linked to each other, or the other end is linked
   to a third port.
-- **Rate history**: each live rate is kept per faceplate port: 1 hour as read, 24 hours in 5-minute buckets, 7 days
-  in 30-minute buckets (sum, count and peak); written every 5 minutes to `<data>/network/rates/<switchId>.json`
-  (read back when first needed, removed with the switch).
-- **Switch alerts**: the rules are checked at each live read (link down, flapping, errors, saturation, differences)
+- **Rates** (`strata_net::snmp::if_stats`, every live read): ifName, ifAlias, ifAdminStatus, ifOperStatus,
+  ifHighSpeed, ifHCIn/OutOctets (Counter64), ifIn/OutErrors, ifIn/OutDiscards (Counter32). ifHCInOctets is walked with
+  sysUpTime.0 as a GETBULK non-repeater (`1.3.6.1.2.1.1.3` asked by GETNEXT in every request of that walk), so each
+  interface's octets come with the switch's uptime of the same answer; the other columns follow in the next requests
+  of the read, at a near constant offset. An agent that refuses the non-repeater is walked without it.
+  The interval of a rate is the sysUpTime delta (wrapping at 2^32 cs) when both reads have it and it is within half
+  the interval (at least 5 s) of the server's clock; else the server's clock, taken right after the counters (a
+  switch that restarted, no sysUpTime). Octet counters that went back skip the sample; a Counter32 (discards) that
+  went from the upper half of 2^32 to the lower half wrapped, else it was cleared and gives 0.
+  *Cached counters* (NX-OS refreshes its interface counters every few seconds): when both octet counters of a port
+  that is up did not move while it had traffic (or before its first rate), the read is stale: nothing is recorded,
+  the rates stay, and the next read that moved gives the rate over the whole time. At most 2 reads are skipped in a
+  row (a rate covers at most 3 intervals), then a stop is taken as real. Once stale reads came twice among the last 24
+  moves of a port's counters while it carries ≥ 10 kb/s, each move is taken as one refresh of the switch and the
+  interval is the refresh period (the average time between those moves), not the time between the two reads that
+  saw it, which jitters by up to one read interval as the reads drift across the refreshes. The first rate of a port is computed from
+  the counters' first move, not from the first read (which can catch them anywhere in their refresh period).
+- **Rate history**: each live rate and discard rate is kept per faceplate port: 1 hour as read, 24 hours in 5-minute
+  buckets, 7 days in 30-minute buckets (sum, count and peak); written every 5 minutes to
+  `<data>/network/rates/<switchId>.json` (read back when first needed, removed with the switch). Fine entries are
+  `[ms, in, out, inDiscards, outDiscards]`, buckets `[start, n, sumIn, sumOut, peakIn, peakOut, sumInDisc,
+  sumOutDisc, peakInDisc, peakOutDisc]`; files saved before the discards (3 and 6 numbers) read back with none.
+- **Switch alerts**: the rules are checked at each live read (link down, flapping, errors, discards, saturation, differences)
   and each slow read (optics, power supplies, fans, temperatures, PoE budget, neighbours). A condition raises its
   alert once, then not again until it has cleared (in memory: a restart may raise it again, but never while the same
   alert waits unseen); the drops of a flapping port are not reported one by one. A part of the slow read that failed
-  keeps its conditions as they were.
+  keeps its conditions as they were. `portDiscards`: the in + out discard rate of the reads, weighted by time, over the
+  last minute (once a minute is covered), above the limit (`value` = that average in packets/s); like `portErrors`
+  it stays raised while the port still drops, under the limit. `portSaturated` compares the busier direction,
+  max(in, out), with the link speed (full duplex), never their sum.
 - **Detection** (`POST /api/switches/detect`): reads the system group and ENTITY chassis (name, description, model,
   serial, firmware, location) and the interface table (ifName or ifDescr, ifType, ifHighSpeed). Physical ports are the
   interfaces of type 6, 62, 69 or 117 (or, when the type is not given, named like Ethernet / Eth / Gi / Te / Twe / Fo /

@@ -23,6 +23,8 @@ const EVERY: Duration = Duration::from_secs(60);
 const CPU_KEEP: i64 = 24 * 3_600_000;
 const FLAP_WINDOW: i64 = 600_000;
 const SATURATION_FOR: Duration = Duration::from_secs(60);
+/// Discards are averaged over this long before they are compared with the rule.
+const DISCARDS_FOR: Duration = Duration::from_secs(60);
 
 /// The slow reads of an online switch (in memory only).
 #[derive(Default)]
@@ -411,6 +413,8 @@ pub struct Watch {
     errors: HashMap<u16, (u64, Instant)>,
     /// Since when each port is above the saturation limit.
     hot: HashMap<u16, Instant>,
+    /// Discards (in + out packets/s) at each read, the last minute and the read before it.
+    discards: HashMap<u16, VecDeque<(Instant, f64)>>,
     /// Neighbours at the last read (port, remote name, remote port); None before the first.
     neighbours: Option<HashSet<(String, String, String)>>,
     /// The differences were seen once (those already there when the switch went online are not new).
@@ -453,7 +457,19 @@ fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
-/// The rules on a live read: watched ports down, flapping, errors, saturation, new differences.
+/// The average of `(when, value)` readings over the time they cover (each value holds
+/// since the reading before it), once they cover `span`; None before.
+fn sustained(list: &VecDeque<(Instant, f64)>, span: Duration) -> Option<f64> {
+    let (first, last) = (list.front()?.0, list.back()?.0);
+    let covered = last.duration_since(first);
+    if covered < span || covered.is_zero() {
+        return None;
+    }
+    let sum: f64 = list.iter().zip(list.iter().skip(1)).map(|(a, b)| b.0.duration_since(a.0).as_secs_f64() * b.1).sum();
+    Some(sum / covered.as_secs_f64())
+}
+
+/// The rules on a live read: watched ports down, flapping, errors, discards, saturation, new differences.
 pub fn check_live(w: &mut Watch, rules: &AlertRules, sw: &Switch, ports: &[LivePort], diffs: Option<&[Diff]>, now_ms: i64, now: Instant) -> Vec<Raise> {
     let mut pass = Pass::new(w);
     for lp in ports {
@@ -497,6 +513,23 @@ pub fn check_live(w: &mut Watch, rules: &AlertRules, sw: &Switch, ports: &[LiveP
                 }
             }
         }
+        // Discards: in + out packets a second, averaged over a minute.
+        let window = pass.w.discards.entry(n).or_default();
+        window.push_back((now, lp.in_discards_pps + lp.out_discards_pps));
+        while window.len() > 2 && now.duration_since(window[1].0) >= DISCARDS_FOR {
+            window.pop_front();
+        }
+        if let Some(avg) = sustained(window, DISCARDS_FOR) {
+            let key = format!("discards:{n}");
+            if rules.discards.on && avg > f64::from(rules.discards.value) {
+                pass.hit(key, raise("portDiscards", Some(n), "", Some(round1(avg)), Some(f64::from(rules.discards.value))));
+            } else if rules.discards.on && avg > 0.0 && pass.w.active.contains(&key) {
+                // Still dropping, under the limit: not cleared until it stops.
+                pass.seen.insert(key);
+            }
+        } else if pass.w.active.contains(&format!("discards:{n}")) {
+            pass.seen.insert(format!("discards:{n}"));
+        }
         // Saturation for a minute.
         let pct = if lp.up && lp.speed_mbps > 0 { lp.in_bps.max(lp.out_bps) as f64 / (lp.speed_mbps as f64 * 1e6) * 100.0 } else { 0.0 };
         if rules.saturation.on && pct > f64::from(rules.saturation.value) {
@@ -508,7 +541,7 @@ pub fn check_live(w: &mut Watch, rules: &AlertRules, sw: &Switch, ports: &[LiveP
             pass.w.hot.remove(&n);
         }
     }
-    let mut families = vec!["down:", "flap:", "errors:", "saturation:"];
+    let mut families = vec!["down:", "flap:", "errors:", "discards:", "saturation:"];
     // New differences, once the VLAN setup is known.
     if let Some(diffs) = diffs {
         let first = !pass.w.drift_known;
@@ -806,6 +839,66 @@ mod tests {
         assert!(check_live(&mut w, &off, &s, &[lp(2, true, 9000, 950_000_000)], None, 60_000, t(120)).is_empty());
         let r = check_live(&mut w, &rules, &s, &[lp(2, true, 9000, 950_000_000)], None, 90_000, t(121));
         assert!(r.is_empty(), "the saturation counts again from now");
+        // Full duplex: each direction has the whole link; 60 % in + 50 % out is not saturated.
+        let mut w = Watch::default();
+        let mut both = lp(3, true, 0, 600_000_000);
+        both.out_bps = 500_000_000;
+        for k in 0..=12u64 {
+            assert!(check_live(&mut w, &rules, &s, std::slice::from_ref(&both), None, (k * 10_000) as i64, t(k * 10)).is_empty());
+        }
+        // The busier direction above the limit for a minute: saturated.
+        let mut out = lp(3, true, 0, 100_000_000);
+        out.out_bps = 950_000_000;
+        let mut r = Vec::new();
+        for k in 13..=19u64 {
+            r.extend(check_live(&mut w, &rules, &s, std::slice::from_ref(&out), None, (k * 10_000) as i64, t(k * 10)));
+        }
+        assert_eq!(kinds(&r), vec![("portSaturated", Some(3))]);
+    }
+
+    #[test]
+    fn discards_over_a_minute() {
+        let s = sw();
+        let rules = AlertRules::default();
+        let mut w = Watch::default();
+        let t0 = Instant::now();
+        let at = |k: u64, pps: f64| {
+            let mut p = lp(2, true, 0, 0);
+            p.out_discards_pps = pps;
+            (p, t0 + Duration::from_secs(k * 10))
+        };
+        let mut raised = Vec::new();
+        // 40 packets/s out for 30 s, then nothing: the minute averages 20 > 10, raised once.
+        for k in 0..=6 {
+            let (p, now) = at(k, if (1..=3).contains(&k) { 40.0 } else { 0.0 });
+            raised.push(check_live(&mut w, &rules, &s, &[p], None, (k * 10_000) as i64, now));
+        }
+        assert!(raised[..5].iter().all(|r| r.is_empty()), "not before a minute is covered");
+        assert_eq!(raised[6].iter().map(|x| (x.kind, x.port, x.value, x.limit)).collect::<Vec<_>>(), vec![("portDiscards", Some(2), Some(20.0), Some(10.0))]);
+        // Bursts of 15/s every other read (average 7.5/s): still dropping, not raised again.
+        for k in 7..=20 {
+            let (p, now) = at(k, if k % 2 == 0 { 15.0 } else { 0.0 });
+            assert!(check_live(&mut w, &rules, &s, &[p], None, (k * 10_000) as i64, now).is_empty());
+        }
+        // A minute without drops clears it; the next minute above the limit raises it again.
+        for k in 21..=27 {
+            let (p, now) = at(k, 0.0);
+            assert!(check_live(&mut w, &rules, &s, &[p], None, (k * 10_000) as i64, now).is_empty());
+        }
+        let mut again = Vec::new();
+        for k in 28..=34 {
+            let (p, now) = at(k, 12.0);
+            again.extend(check_live(&mut w, &rules, &s, &[p], None, (k * 10_000) as i64, now));
+        }
+        assert_eq!(again.iter().map(|x| x.kind).collect::<Vec<_>>(), vec!["portDiscards"]);
+        // Rule off: nothing.
+        let mut off = rules.clone();
+        off.discards.on = false;
+        let mut w = Watch::default();
+        for k in 0..=10 {
+            let (p, now) = at(k, 500.0);
+            assert!(check_live(&mut w, &off, &s, &[p], None, (k * 10_000) as i64, now).is_empty());
+        }
     }
 
     #[test]

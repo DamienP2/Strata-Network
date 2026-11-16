@@ -28,7 +28,7 @@ export interface NotificationSettings {
 }
 
 const MACHINE_KINDS: string[] = ['newHost', 'hostGone', 'ipConflict', 'vlanMismatch', 'watchDown', 'watchUp'];
-const SWITCH_KINDS: string[] = ['portDown', 'portFlap', 'portErrors', 'portSaturated', 'configDrift', 'opticLow', 'psuFault', 'fanFault', 'tempHigh', 'poeBudget', 'neighbourNew', 'neighbourGone'];
+const SWITCH_KINDS: string[] = ['portDown', 'portFlap', 'portErrors', 'portDiscards', 'portSaturated', 'configDrift', 'opticLow', 'psuFault', 'fanFault', 'tempHigh', 'poeBudget', 'neighbourNew', 'neighbourGone'];
 
 const hookKindLabel = (k: HookKind) => (k === 'teams' ? 'Teams' : k === 'slack' ? 'Slack' : t('Generic'));
 const validEmail = (s: string) => /^[^\s@<>]+@[^\s@<>]+$/.test(s.trim()) || /^[^<>]*<[^\s@<>]+@[^\s@<>]+>$/.test(s.trim());

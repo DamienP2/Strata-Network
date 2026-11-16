@@ -17,9 +17,9 @@ import { blocksOf, summary } from '../net/groups';
 import type { Address, Alert, AlertRules, Live, LiveDiff, LivePort, Neighbour, Network, Optic, PoePort, PortKind, PortMode, SnmpAgent, Switch, SwitchPort, Vlan } from '../net/types';
 
 type PortSet = Partial<Record<keyof SwitchPort, unknown>>;
-/** Filtre : tous, un VLAN (`v:10`), les trunks, les libres ; en ligne : lien actif, sans lien, écarts, erreurs, voisins, agrégats, surveillés. */
-type Filter = 'all' | 'trunk' | 'free' | `v:${number}` | 'up' | 'down' | 'diff' | 'errors' | 'nb' | 'lag' | 'watched';
-const LIVE_FILTERS: Filter[] = ['up', 'down', 'diff', 'errors', 'nb', 'lag', 'watched'];
+/** Filtre : tous, un VLAN (`v:10`), les trunks, les libres ; en ligne : lien actif, sans lien, écarts, erreurs, rejets, voisins, agrégats, surveillés. */
+type Filter = 'all' | 'trunk' | 'free' | `v:${number}` | 'up' | 'down' | 'diff' | 'errors' | 'discards' | 'nb' | 'lag' | 'watched';
+const LIVE_FILTERS: Filter[] = ['up', 'down', 'diff', 'errors', 'discards', 'nb', 'lag', 'watched'];
 type Tab = 'ports' | 'optics' | 'mcast' | 'health' | 'alerts';
 
 export function Switches({ id }: { id?: string }) {
@@ -271,6 +271,7 @@ function SwitchView({
         up: sw.ports.filter((p) => liveOf.get(p.n)?.up).length,
         diff: sw.ports.filter((p) => diffOf.has(p.n)).length,
         errors: sw.ports.filter((p) => errorsOf(liveOf.get(p.n)) > 0).length,
+        discards: sw.ports.filter((p) => discardsOf(liveOf.get(p.n)) > 0).length,
         watched: sw.ports.filter((p) => p.watched).length,
         nb: sw.ports.filter((p) => facts.nb.has(p.n)).length,
         lag: sw.ports.filter((p) => facts.lag.has(p.n)).length,
@@ -366,6 +367,7 @@ function SwitchView({
     if (filter === 'down' && liveOf.get(p.n)?.up) return false;
     if (filter === 'diff' && !diffOf.has(p.n)) return false;
     if (filter === 'errors' && !errorsOf(liveOf.get(p.n))) return false;
+    if (filter === 'discards' && !discardsOf(liveOf.get(p.n))) return false;
     if (filter === 'nb' && !facts.nb.has(p.n)) return false;
     if (filter === 'lag' && !facts.lag.has(p.n)) return false;
     if (filter === 'watched' && !p.watched) return false;
@@ -394,7 +396,8 @@ function SwitchView({
     // En ligne : le lien et la charge lus dans le switch.
     const lp = live ? liveOf.get(p.n) : undefined;
     const up = !!lp?.up;
-    const load = lp && up && lp.speedMbps ? Math.min(100, ((lp.inBps + lp.outBps) / (lp.speedMbps * 1e6)) * 100) : 0;
+    // Full duplex : chaque sens a toute la vitesse du lien, la charge est celle du sens le plus chargé.
+    const load = lp && up && lp.speedMbps ? Math.min(100, (Math.max(lp.inBps, lp.outBps) / (lp.speedMbps * 1e6)) * 100) : 0;
     const pp = facts.poe.get(p.n);
     return (
       <button
@@ -481,7 +484,7 @@ function SwitchView({
     .filter((x) => x.id !== sw.id)
     .flatMap((x) => x.ports.map((p) => ({ value: `peer:${x.id}:${p.n}`, label: `${x.name} · ${p.name || p.n}`, sub: p.label || undefined, icon: <EthernetPort size={12} />, group: t('Switches') })));
   const allTicked = ports.length > 0 && ports.every((p) => ticked.has(p.n));
-  const cols = live ? (editable ? 11 : 10) : 0;
+  const cols = live ? (editable ? 12 : 11) : 0;
   const links = info?.links ?? [];
   const otherName = (id: string) => switches.find((x) => x.id === id)?.name ?? id;
   const otherPort = (id: string, n: number) => portName(switches.find((x) => x.id === id), n);
@@ -659,6 +662,9 @@ function SwitchView({
                     <button className={`asr-chip ${filter === 'errors' ? 'on' : ''}`} onClick={() => setFilter('errors')}>
                       {t('Errors')} <span className="asr-chip-n">{counts.errors}</span>
                     </button>
+                    <button className={`asr-chip ${filter === 'discards' ? 'on' : ''}`} onClick={() => setFilter('discards')}>
+                      {t('Discards')} <span className="asr-chip-n">{counts.discards}</span>
+                    </button>
                   </>
                 )}
                 {used.map((v) => {
@@ -685,13 +691,14 @@ function SwitchView({
                 {live ? (
                   <colgroup>
                     {editable && <col style={{ width: 30 }} />}
-                    <col style={{ width: 28 }} />
+                    <col style={{ width: 32 }} />
                     <col style={{ width: 120 }} />
-                    <col style={{ width: '12%' }} />
-                    <col style={{ width: '22%' }} />
+                    <col style={{ width: '11%' }} />
+                    <col style={{ width: '20%' }} />
                     <col style={{ width: 76 }} />
                     <col style={{ width: 150 }} />
-                    <col style={{ width: 64 }} />
+                    <col style={{ width: 78 }} />
+                    <col style={{ width: 70 }} />
                     <col style={{ width: isPoe ? '12%' : '13%' }} />
                     <col style={{ width: isPoe ? 110 : 120 }} />
                     <col style={{ width: 34 }} />
@@ -724,6 +731,7 @@ function SwitchView({
                         <th>{t('Link')}</th>
                         <th>{t('Rate ↓ / ↑')}</th>
                         <th className="num">{t('Errors')}</th>
+                        <th className="num">{t('Discards')}</th>
                         <th>{t('Neighbour (CDP / LLDP)')}</th>
                         <th>{isPoe ? t('PoE') : t('Aggregate · STP')}</th>
                         <th />
@@ -937,6 +945,7 @@ function PortRow({
   const learnt = p.lldp ? t('LLDP: {name} {port}', { name: p.lldp.name, port: p.lldp.port }) : p.learnt.length ? p.learnt[0] + (p.learnt.length > 1 ? ` +${p.learnt.length - 1}` : '') : '';
   const diffTitle = diff ? `${t('Switch: {s}', { s: diffWords(diff.switch) })} · ${t('Inventory: {s}', { s: diffWords(diff.inventory) })}` : undefined;
   const errors = errorsOf(lp);
+  const dropping = lp ? lp.inDiscardsPps + lp.outDiscardsPps : 0;
   const connect = editable ? (
     (linkValue || p.mode !== 'off') && <Dropdown className="cell" value={linkValue} placeholder={online ? '—' : t('Connect…')} title={online ? t('Connect…') : undefined} options={links} onChange={link} />
   ) : (
@@ -1026,6 +1035,16 @@ function PortRow({
               </span>
             )}
           </td>
+          <td className="num">
+            {lp && (
+              <span
+                className={`err ${dropping > 0 ? 'bad' : ''}`}
+                title={`${t('In {a} · out {b}', { a: fmtCount(lp.inDiscards), b: fmtCount(lp.outDiscards) })} · ↓ ${t('{n}/s', { n: fmtPps(lp.inDiscardsPps) })} ↑ ${t('{n}/s', { n: fmtPps(lp.outDiscardsPps) })}`}
+              >
+                {dropping > 0 ? t('{n}/s', { n: fmtPps(dropping) }) : fmtCount(discardsOf(lp))}
+              </span>
+            )}
+          </td>
           <td>
             {nb ? (
               <span className="nb" title={[nb.platform, nb.ip, nb.chassisId].filter(Boolean).join(' · ') || undefined}>
@@ -1083,7 +1102,7 @@ function PortRow({
       {row}
       <tr className="chart">
         <td colSpan={cols}>
-          <PortChart sw={sw} p={p} />
+          <PortChart sw={sw} p={p} speedMbps={lp?.up ? lp.speedMbps : undefined} />
         </td>
       </tr>
     </>
@@ -1169,6 +1188,9 @@ function ReadAgo({ at }: { at: number }) {
 }
 
 const errorsOf = (lp: LivePort | undefined) => (lp ? lp.inErrors + lp.outErrors : 0);
+const discardsOf = (lp: LivePort | undefined) => (lp ? lp.inDiscards + lp.outDiscards : 0);
+/** Paquets par seconde : « 0,4 », « 12 ». */
+const fmtPps = (v: number) => v.toLocaleString(locale(), { maximumFractionDigits: v < 1 ? 2 : v < 10 ? 1 : 0 });
 const fmtCount = (n: number) => n.toLocaleString(locale());
 const fmtW = (w: number) => w.toLocaleString(locale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 

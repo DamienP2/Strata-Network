@@ -157,8 +157,33 @@ export function HealthStrip({ sw, live, info }: { sw: Switch; live: Live; info: 
 type Range = '1h' | '24h' | '7d';
 let lastRange: Range = '24h';
 
-/** La courbe des débits d'un port (entrée en aplat, sortie en trait). */
-export function PortChart({ sw, p }: { sw: Switch; p: SwitchPort }) {
+/** Un débit d'axe : « 25 Gb/s », « 12,5 Gb/s », « 400 Mb/s ». */
+function fmtAxis(bps: number): string {
+  if (bps >= 1e9) return t('{n} Gb/s', { n: num(bps / 1e9, 1) });
+  if (bps >= 1e6) return t('{n} Mb/s', { n: num(bps / 1e6, 1) });
+  if (bps >= 1e3) return t('{n} kb/s', { n: num(bps / 1e3, 0) });
+  return t('{n} b/s', { n: num(bps, 0) });
+}
+
+/** Paquets par seconde : « 0,04 », « 2,5 », « 1 250 ». */
+const fmtPps = (v: number) => num(v, v < 1 ? 2 : v < 10 ? 1 : 0);
+
+/** La vitesse du lien en repère : « 25G », « 100M ». */
+const speedTag = (mbps: number) => (mbps >= 1000 ? `${num(mbps / 1000, 1)}G` : `${mbps}M`);
+
+/** Le haut d'une échelle : 1, 2, 2,5 ou 5 × 10ⁿ au-dessus de v. */
+function niceCeil(v: number): number {
+  if (v <= 0) return 1;
+  const p = 10 ** Math.floor(Math.log10(v));
+  const m = [1, 2, 2.5, 5, 10].find((x) => x * p >= v) ?? 10;
+  return m * p;
+}
+
+/** Un pourcentage d'axe, plus fin sous 10 %. */
+const fmtPct = (v: number) => t('{n} %', { n: num(v, v === 0 || v >= 10 ? 0 : v < 1 ? 2 : 1) });
+
+/** La courbe des débits d'un port (entrée en aplat, sortie en trait), la vitesse du lien en repère, et les rejets en dessous. */
+export function PortChart({ sw, p, speedMbps }: { sw: Switch; p: SwitchPort; speedMbps?: number }) {
   const [range, setRangeState] = useState<Range>(lastRange);
   const setRange = (r: Range) => {
     lastRange = r;
@@ -182,21 +207,29 @@ export function PortChart({ sw, p }: { sw: Switch; p: SwitchPort }) {
   const W = 1000;
   const TOP = 10;
   const BOTTOM = 110;
+  const DH = 36;
+  const speed = (speedMbps ?? 0) * 1e6;
   const shapes = useMemo(() => {
     if (!h || h.points.length === 0) return null;
     const span = Math.max(1, h.to - h.from);
-    const max = Math.max(1, ...h.points.map((x) => Math.max(x.in, x.out)));
+    const peak = Math.max(0, ...h.points.map((x) => Math.max(x.in, x.out)));
+    // Échelle : la vitesse du lien (ou le pic s'il la dépasse) ; un trafic sous 5 % de la vitesse : à sa propre échelle.
+    const full = speed > 0 && peak >= speed * 0.05;
+    const max = full ? Math.max(speed, peak) : niceCeil(peak);
     const x = (at: number) => Math.max(0, Math.min(W, ((at - h.from) / span) * W));
     const y = (v: number) => BOTTOM - (v / max) * (BOTTOM - TOP);
-    // Sans lecture pendant plus de 2,5 pas : la courbe s'interrompt.
+    const levels = full ? [0, speed / 2, speed] : [0, max / 2, max];
+    const grid = levels.map((v) => ({ y: y(v), left: v === 0 ? '0' : fmtAxis(v), right: speed > 0 ? fmtPct((v / speed) * 100) : '' }));
+    if (full && max > speed) grid.push({ y: TOP, left: fmtAxis(max), right: '' });
+    // Sans lecture pendant plus de 3,5 pas : la courbe s'interrompt (un débit couvre jusqu'à 3 lectures quand le switch rafraîchit ses compteurs moins souvent).
     const segs: PortHistory['points'][] = [];
     for (const pt of h.points) {
       const last = segs[segs.length - 1];
-      if (last && pt.at - last[last.length - 1].at <= h.stepSecs * 2500) last.push(pt);
+      if (last && pt.at - last[last.length - 1].at <= h.stepSecs * 3500) last.push(pt);
       else segs.push([pt]);
     }
     const stepW = ((h.stepSecs * 1000) / span) * W;
-    return segs.map((s) => {
+    const lines = segs.map((s) => {
       const xs = s.map((pt) => x(pt.at));
       if (s.length === 1) {
         s = [s[0], s[0]];
@@ -208,7 +241,25 @@ export function PortChart({ sw, p }: { sw: Switch; p: SwitchPort }) {
         out: s.map((pt, i) => `${xs[i].toFixed(1)},${y(pt.out).toFixed(1)}`).join(' '),
       };
     });
-  }, [h]);
+    // Rejets : sortie (↑) au-dessus du milieu, entrée (↓) en dessous ; les pics des tranches en clair.
+    const dMax = Math.max(0, ...h.points.map((pt) => Math.max(pt.inDiscards, pt.outDiscards, pt.inDiscardsPeak ?? 0, pt.outDiscardsPeak ?? 0)));
+    const half = DH / 2 - 1;
+    const dh = (v: number) => (dMax > 0 ? Math.max(v > 0 ? 1 : 0, (v / dMax) * half) : 0);
+    const bw = Math.max(1, stepW * 0.8);
+    const bars: { x: number; w: number; y: number; h: number; cls: string }[] = [];
+    for (const pt of h.points) {
+      const bx = Math.max(0, x(pt.at) - bw / 2);
+      const add = (v: number | undefined, up: boolean, cls: string) => {
+        const hh = dh(v ?? 0);
+        if (hh > 0) bars.push({ x: bx, w: bw, y: up ? DH / 2 - hh : DH / 2, h: hh, cls });
+      };
+      add(pt.outDiscardsPeak, true, 'dout peak');
+      add(pt.inDiscardsPeak, false, 'din peak');
+      add(pt.outDiscards, true, 'dout');
+      add(pt.inDiscards, false, 'din');
+    }
+    return { lines, grid, speedY: speed > 0 && speed <= max ? y(speed) : null, bars, dMax };
+  }, [h, speed]);
 
   const ticks = useMemo(() => {
     if (!h) return [];
@@ -221,6 +272,7 @@ export function PortChart({ sw, p }: { sw: Switch; p: SwitchPort }) {
     });
   }, [h, range]);
 
+  const dropping = !!h && (h.inDiscards.peak > 0 || h.outDiscards.peak > 0);
   return (
     <div className="chart-box">
       <div className="chart-head">
@@ -229,6 +281,9 @@ export function PortChart({ sw, p }: { sw: Switch; p: SwitchPort }) {
           <>
             <span>↓ {t('average {a} · peak {b}', { a: fmtBps(h.in.avg), b: fmtBps(h.in.peak) })}</span>
             <span>↑ {t('average {a} · peak {b}', { a: fmtBps(h.out.avg), b: fmtBps(h.out.peak) })}</span>
+            <span className={dropping ? 'bad-t' : ''} title={t('Peak ↓ {a}/s · ↑ {b}/s', { a: fmtPps(h.inDiscards.peak), b: fmtPps(h.outDiscards.peak) })}>
+              {t('discards ↓ {a}/s · ↑ {b}/s', { a: fmtPps(h.inDiscards.avg), b: fmtPps(h.outDiscards.avg) })}
+            </span>
           </>
         )}
         <div className="spacer" />
@@ -242,17 +297,61 @@ export function PortChart({ sw, p }: { sw: Switch; p: SwitchPort }) {
           onChange={setRange}
         />
       </div>
-      <svg className="chart-svg" viewBox={`0 0 ${W} 120`} preserveAspectRatio="none">
-        <line className="grid" x1="0" y1={TOP} x2={W} y2={TOP} />
-        <line className="grid" x1="0" y1="60" x2={W} y2="60" />
-        <line className="grid" x1="0" y1={BOTTOM} x2={W} y2={BOTTOM} />
-        {shapes?.map((s, i) => (
-          <g key={i}>
-            <path className="in" d={s.area} />
-            <polyline className="out" points={s.out} />
-          </g>
-        ))}
-      </svg>
+      <div className="chart-plot">
+        <svg className="chart-svg" viewBox={`0 0 ${W} 120`} preserveAspectRatio="none">
+          {(shapes?.grid ?? [{ y: TOP }, { y: 60 }, { y: BOTTOM }]).map((g, i) => (
+            <line key={i} className="grid" x1="0" y1={g.y} x2={W} y2={g.y} />
+          ))}
+          {shapes?.lines.map((s, i) => (
+            <g key={i}>
+              <path className="in" d={s.area} />
+              <polyline className="out" points={s.out} />
+            </g>
+          ))}
+          {shapes?.speedY != null && <line className="speed" x1="0" y1={shapes.speedY} x2={W} y2={shapes.speedY} />}
+        </svg>
+        {shapes && (
+          <>
+            <div className="chart-axis left">
+              {shapes.grid.map((g, i) => (
+                <span key={i} style={{ top: g.y }}>
+                  {g.left}
+                </span>
+              ))}
+            </div>
+            <div className="chart-axis right">
+              {shapes.grid.map((g, i) => (
+                <span key={i} style={{ top: g.y }}>
+                  {g.right}
+                </span>
+              ))}
+            </div>
+            {shapes.speedY != null && speedMbps ? (
+              <span className="chart-speed" style={{ top: shapes.speedY }}>
+                {speedTag(speedMbps)}
+              </span>
+            ) : null}
+          </>
+        )}
+      </div>
+      <div className="chart-plot">
+        <svg className="chart-disc" viewBox={`0 0 ${W} ${DH}`} preserveAspectRatio="none">
+          <line className="grid" x1="0" y1={DH / 2} x2={W} y2={DH / 2} />
+          {shapes?.bars.map((b, i) => <rect key={i} className={b.cls} x={b.x} y={b.y} width={b.w} height={b.h} />)}
+        </svg>
+        {shapes && (
+          <div className="chart-axis left">
+            {shapes.dMax > 0 ? (
+              <>
+                <span style={{ top: 6 }}>↑ {t('{n}/s', { n: fmtPps(shapes.dMax) })}</span>
+                <span style={{ top: DH - 6 }}>↓ {t('{n}/s', { n: fmtPps(shapes.dMax) })}</span>
+              </>
+            ) : (
+              <span style={{ top: DH / 2 }}>{t('{n}/s', { n: 0 })}</span>
+            )}
+          </div>
+        )}
+      </div>
       <div className="chart-head chart-ticks">
         {ticks.map((x, i) => (
           <span key={i}>{x}</span>
@@ -577,6 +676,7 @@ export function AlertsPane({
         {row('linkDown', t('Link down on a watched port'), <div className="muted">{tn(watched, '★ in the list of ports · {n} port', '★ in the list of ports · {n} ports')}</div>)}
         {row('flap', t('Unstable port'), numIn('flap', t('more than'), t('drops in 10 min'), { min: 1, max: 1000 }))}
         {row('errors', t('Errors on a port'), numIn('errors', t('more than'), t('per minute'), { min: 1, max: 1e9 }))}
+        {row('discards', t('Discards on a port'), numIn('discards', t('more than'), t('packets/s for 1 min'), { min: 0.1, max: 1e9, precision: 1 }))}
         {row('opticRx', t('Weak optical reception'), numIn('opticRx', t('below'), t('dBm'), { min: -40, max: 10 }))}
         {row('saturation', t('Saturated port'), numIn('saturation', t('above'), t('% for 1 min'), { min: 1, max: 100 }))}
         {row('health', t('Power supply, fan or temperature'), numIn('health', t('above'), t('°C'), { min: 20, max: 150 }))}
