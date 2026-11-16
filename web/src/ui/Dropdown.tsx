@@ -26,6 +26,7 @@ export function Dropdown<T extends string>({
   placeholder = '—',
   className,
   disabled,
+  face,
 }: {
   value: T | null;
   options: DropOption<T>[];
@@ -34,6 +35,8 @@ export function Dropdown<T extends string>({
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  /** Ce que montre le bouton, à la place de l’option choisie. */
+  face?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [hover, setHover] = useState(-1);
@@ -137,12 +140,16 @@ export function Dropdown<T extends string>({
           } else if (e.key === 'Tab') close();
         }}
       >
-        {current?.icon !== undefined && <span className="dd-icon">{current.icon}</span>}
-        <span className={current ? 'dd-label' : 'dd-label dd-ph'} style={current?.style}>
-          {current ? current.label : placeholder}
-        </span>
-        {current?.detail && <span className="dd-detail">{current.detail}</span>}
-        <ChevronDown size={12} />
+        {face ?? (
+          <>
+            {current?.icon !== undefined && <span className="dd-icon">{current.icon}</span>}
+            <span className={current ? 'dd-label' : 'dd-label dd-ph'} style={current?.style}>
+              {current ? current.label : placeholder}
+            </span>
+            {current?.detail && <span className="dd-detail">{current.detail}</span>}
+            <ChevronDown size={12} />
+          </>
+        )}
       </button>
       {open &&
         createPortal(

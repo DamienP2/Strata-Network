@@ -488,11 +488,12 @@ a.btn { color: var(--text); }
 .net-page { height: 100%; display: grid; grid-template-columns: 240px minmax(0, 1fr) 340px; }
 .net-page > .library { min-width: 0; }
 .net-page.two { grid-template-columns: 240px minmax(0, 1fr); }
+.net-page.scan-page { grid-template-columns: 184px minmax(0, 1fr); }
 .vlan-sw { width: 10px; height: 10px; border-radius: 3px; flex: none; background: var(--vlan, var(--text-3)); }
 .vlan-tag { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-11); padding: 1px 7px 1px 5px; border-radius: 10px; white-space: nowrap; background: color-mix(in srgb, var(--vlan) 16%, transparent); color: var(--text); }
 .vlan-tag .vlan-sw { width: 8px; height: 8px; border-radius: 2px; }
 .vlan-tag b { font-family: var(--mono); font-weight: 600; }
-.card-table { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: auto; }
+.card-table { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: auto; }
 .data-table tbody tr { cursor: pointer; }
 .data-table tbody tr:hover td { background: var(--panel-2); }
 .data-table tbody tr.sel td { background: var(--accent-soft); }
@@ -672,7 +673,7 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 /* ── Scan : tout dans le tableau, sans panneau ── */
 .library-inner.full { max-width: none; padding-left: 20px; padding-right: 20px; }
 .muted2 { color: var(--text-3); }
-.xt { width: 100%; min-width: 1240px; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 12.5px; }
+.xt { border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 12.5px; }
 .xt th { position: sticky; top: 0; z-index: 2; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; padding: 9px 8px; background: var(--panel-2); border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .xt th.right { text-align: right; }
 .xt td { height: 32px; padding: 0 8px; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -691,7 +692,9 @@ a.port-chip:hover { background: var(--accent); color: var(--on-accent); }
 .xt tbody tr.pad td { padding: 0; border: 0; background: none; box-shadow: none; }
 .xt td > .st { vertical-align: middle; }
 .xt .badge { margin-left: 6px; }
-.xt .ports { align-items: center; }
+.xt .ports { align-items: center; position: relative; overflow: hidden; }
+.ports > * { flex: none; }
+.ports .fit-hid { position: absolute; left: 0; top: 0; visibility: hidden; }
 .xt td > .ports, .xt td > .cell-kind { vertical-align: middle; }
 /* Cellules modifiables : du texte, un cadre au survol de la ligne, un champ au clic */
 .ed { display: flex; align-items: center; gap: 6px; height: 26px; min-width: 0; margin: 0 -6px; padding: 0 6px; border-radius: 6px; border: 1px solid transparent; cursor: text; overflow: hidden; }
@@ -729,28 +732,18 @@ tr:hover .dd-btn.cell > svg, .dd-btn.cell.open > svg { opacity: 1; }
 .pop .dd-btn { height: 28px; }
 .pop-actions { display: flex; gap: 6px; justify-content: flex-end; }
 
-/* ── Switchs : une page, façades et ports ── */
+/* ── Switchs : façade et ports du switch choisi ── */
 .library-inner.sw-page { max-width: 1500px; }
-.sw-list { display: flex; flex-direction: column; gap: 14px; }
-.sw-sec { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
-.sw-sec > header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
-.sw-twirl { flex: none; width: 22px; height: 22px; display: grid; place-items: center; border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: 6px; padding: 0; }
-.sw-twirl:hover { color: var(--text); background: var(--panel-3); }
-.sw-twirl svg { transition: transform 0.12s; }
-.sw-sec.closed .sw-twirl svg { transform: rotate(-90deg); }
-.sw-title { min-width: 0; }
-.sw-title h2 { margin: 0; font-size: 15px; font-weight: 700; }
-.sw-title p { margin: 2px 0 0; font-size: 12px; }
-.sw-body { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 10px; }
 .asr-chip .vlan-sw { display: inline-block; margin-right: 5px; vertical-align: -1px; }
-.pt { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 12.5px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.pt { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 12.5px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .pt th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; padding: 8px; background: var(--panel-2); border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pt td { height: 34px; padding: 0 8px; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pt tr:last-child td { border-bottom: none; }
-.pt tbody tr:hover td { background: var(--panel-2); }
-.pt tbody tr.sel td { background: var(--accent-soft); }
+.pt tbody tr:hover td { background-color: var(--panel-2); }
+.pt tbody tr.sel td { background-color: var(--accent-soft); }
 .pt tr.off td { color: var(--text-3); }
 .pt td:first-child { box-shadow: inset 3px 0 0 var(--vlan, transparent); }
+.pt tr.trunk td:first-child { box-shadow: none; background-image: repeating-linear-gradient(180deg, var(--vlan, var(--text-3)) 0 3px, transparent 3px 5px); background-size: 3px 100%; background-repeat: no-repeat; }
 .pt .segmented button { padding: 2px 7px; font-size: 11px; }
 .pt .vlan-tag { flex: none; }
 .tick { appearance: none; width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--line-2); background: var(--panel-3); cursor: pointer; display: inline-grid; place-items: center; margin: 0; padding: 0; vertical-align: middle; }
@@ -764,6 +757,12 @@ tr:hover .dd-btn.cell > svg, .dd-btn.cell.open > svg { opacity: 1; }
 .dd-btn.add:hover { color: var(--text); border-color: var(--text-3); }
 .dd-btn.add > svg { display: none; }
 .dd-btn.add .dd-label { flex: none; }
+/* Trunk : le VLAN natif, en pastille discrète après les taggués */
+.dd-btn.native, .native-tag { flex: none; display: inline-flex; align-items: center; gap: 5px; width: auto; height: 20px; padding: 0 8px 0 6px; border: 1px solid var(--line-2); border-radius: 10px; background: none; color: var(--text-3); font-size: 11px; }
+.dd-btn.native.unset { padding: 0 8px; border-style: dashed; }
+.dd-btn.native:hover, .dd-btn.native.open { color: var(--text); border-color: var(--text-3); background: none; }
+:is(.dd-btn.native, .native-tag) b { font-family: var(--mono); font-weight: 600; color: var(--text-2); }
+:is(.dd-btn.native, .native-tag) .vlan-sw { width: 8px; height: 8px; border-radius: 2px; }
 .learnt { font: 11px var(--mono); color: var(--text-3); }
 /* Ports cochés : la barre d'action (même style que la barre d'enregistrement) */
 .bulk { position: sticky; bottom: 14px; z-index: 20; display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 16px; background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }
@@ -771,6 +770,8 @@ tr:hover .dd-btn.cell > svg, .dd-btn.cell.open > svg { opacity: 1; }
 .bulk-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bulk .dd-btn { width: 170px; height: 30px; flex: none; }
 .bulk .segmented { flex: none; }
+.bulk-tagged { flex: none; max-width: 360px; }
+.bulk .dd-btn.add { width: auto; height: 20px; }
 
 /* Topologie : rattacher à un parent */
 .tree-act { display: none; width: 22px; height: 22px; }

@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { t } from '../i18n';
 import { TextInput } from '../ui/fields';
@@ -19,10 +19,13 @@ export function VlanTag({ vlan, id, name }: { vlan?: Vlan; id?: number; name?: b
 
 export const vlanStyle = (v: Vlan | undefined): CSSProperties | undefined => (v ? ({ '--vlan': v.color } as CSSProperties) : undefined);
 
+const byWebThenPort = (a: Address) => [...a.ports].sort((x, y) => Number(!!y.web) - Number(!!x.web) || x.port - y.port);
+const moreTitle = (rest: Address['ports']) => rest.map((p) => `${p.port} ${p.web?.scheme ?? p.service ?? ''}`.trim()).join('\n');
+
 /** Les ports ouverts d'une machine : lien pour les ports web. */
 /** The open ports, web pages first; past `max`, a "+N" chip lists the others on hover. */
 export function PortChips({ a, max }: { a: Address; max?: number }) {
-  const sorted = [...a.ports].sort((x, y) => Number(!!y.web) - Number(!!x.web) || x.port - y.port);
+  const sorted = byWebThenPort(a);
   const shown = max === undefined ? sorted : sorted.slice(0, max);
   const rest = sorted.slice(shown.length);
   return (
@@ -31,7 +34,7 @@ export function PortChips({ a, max }: { a: Address; max?: number }) {
         <PortChip key={p.port} ip={a.ip} p={p} svc />
       ))}
       {rest.length > 0 && (
-        <span className="port-more" title={rest.map((p) => `${p.port} ${p.web?.scheme ?? p.service ?? ''}`.trim()).join('\n')}>
+        <span className="port-more" title={moreTitle(rest)}>
           +{rest.length}
         </span>
       )}
@@ -39,7 +42,59 @@ export function PortChips({ a, max }: { a: Address; max?: number }) {
   );
 }
 
-export function PortChip({ ip, p, svc, children }: { ip: string; p: Address['ports'][number]; svc?: boolean; children?: ReactNode }) {
+/**
+ * The open ports, web pages first, as many as the cell can hold; then a "+N" chip lists the others on hover.
+ * Every chip stays in the DOM (the hidden ones out of the flow) so that it can be measured.
+ */
+export function FitChips({ a }: { a: Address }) {
+  const sorted = useMemo(() => byWebThenPort(a), [a]);
+  const ref = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState(sorted.length);
+
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ws = [...el.querySelectorAll<HTMLElement>(':scope > .port-chip')].map((c) => c.offsetWidth);
+    const avail = el.clientWidth;
+    const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
+    const more = el.querySelector<HTMLElement>(':scope > .port-more');
+    // Largeur du « +N » : mesurée quand il est là (par caractère), sinon estimée.
+    const char = more && more.textContent ? (more.offsetWidth - 14) / more.textContent.length : 6.7;
+    const moreW = (n: number) => Math.ceil(14 + char * (String(n).length + 1));
+    let k = ws.length;
+    let used = ws.reduce((s, w, i) => s + w + (i ? gap : 0), 0);
+    while (k > 0 && used + (k < ws.length ? gap + moreW(ws.length - k) : 0) > avail) {
+      k--;
+      used -= ws[k] + (k ? gap : 0);
+    }
+    setFit(k);
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measure, sorted]);
+
+  const rest = sorted.slice(fit);
+  return (
+    <div className="ports fit" ref={ref}>
+      {sorted.map((p, i) => (
+        <PortChip key={p.port} ip={a.ip} p={p} svc hidden={i >= fit} />
+      ))}
+      {rest.length > 0 && (
+        <span className="port-more" title={moreTitle(rest)}>
+          +{rest.length}
+        </span>
+      )}
+    </div>
+  );
+}
+
+export function PortChip({ ip, p, svc, hidden, children }: { ip: string; p: Address['ports'][number]; svc?: boolean; hidden?: boolean; children?: ReactNode }) {
   const name = p.web?.scheme ?? p.service;
   const body = (
     <>
@@ -48,9 +103,10 @@ export function PortChip({ ip, p, svc, children }: { ip: string; p: Address['por
       {children}
     </>
   );
-  if (!p.web) return <span className="port-chip">{body}</span>;
+  const cls = hidden ? 'port-chip fit-hid' : 'port-chip';
+  if (!p.web) return <span className={cls}>{body}</span>;
   return (
-    <a className="port-chip" href={`${p.web.scheme}://${ip}:${p.port}/`} target="_blank" rel="noreferrer" title={p.web.title || t('Open the page')} onClick={(e) => e.stopPropagation()}>
+    <a className={cls} tabIndex={hidden ? -1 : undefined} href={`${p.web.scheme}://${ip}:${p.port}/`} target="_blank" rel="noreferrer" title={p.web.title || t('Open the page')} onClick={(e) => e.stopPropagation()}>
       {body} <ExternalLink size={11} />
     </a>
   );

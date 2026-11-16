@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Check, ChevronDown, EthernetPort, Pencil, Plus, Save, Search, Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Check, EthernetPort, Pencil, Plus, Save, Search, Trash2, X } from 'lucide-react';
 import { t, tc, tn } from '../i18n';
 import { api, can, useApp } from '../store';
 import { navigate } from '../router';
@@ -8,7 +8,7 @@ import { Segmented } from '../ui/fields';
 import { Dropdown, type DropOption } from '../ui/Dropdown';
 import { confirmDialog } from '../ui/dialogs';
 import { Empty } from '../ui/Empty';
-import { useDisplayPref } from '../displayPrefs';
+import { PageHead } from './SidePage';
 import { byIp, validIp } from '../net/ip';
 import { KIND_ICON, displayName, fail, fmtSeen, useAllAddresses, useList, vlanById } from '../net/model';
 import { InlineText, vlanStyle } from '../net/parts';
@@ -17,8 +17,6 @@ import type { Address, Network, PortMode, SnmpAgent, Switch, SwitchPort, Vlan } 
 type PortSet = Partial<Record<keyof SwitchPort, unknown>>;
 /** Filtre : tous, un VLAN (`v:10`), les trunks, les libres. */
 type Filter = 'all' | 'trunk' | 'free' | `v:${number}`;
-
-const key = (sw: string, n: number) => `${sw}:${n}`;
 
 export function Switches({ id }: { id?: string }) {
   const user = useApp((s) => s.auth?.user);
@@ -29,40 +27,33 @@ export function Switches({ id }: { id?: string }) {
   const [agents] = useList<SnmpAgent[]>('snmp', '/api/snmp');
   const addrs = useAllAddresses(networks);
   const [editing, setEditing] = useState<Switch | 'new' | null>(null);
-  const [q, setQ] = useState('');
-  const [filter, setFilter] = useState<Filter>('all');
-  const [ticked, setTicked] = useState<Set<string>>(() => new Set());
 
-  const patch = async (sw: Switch, ports: number[], set: PortSet) => {
+  // Sections de la liste : le groupe de chaque switch (sans groupe d'abord).
+  const groups = useMemo(() => {
+    const m = new Map<string, Switch[]>();
+    for (const s of [...(switches ?? [])].sort((a, b) => a.name.localeCompare(b.name))) {
+      const g = s.group.trim();
+      if (!m.has(g)) m.set(g, []);
+      m.get(g)!.push(s);
+    }
+    return [...m.entries()].sort((a, b) => (a[0] === '' ? -1 : b[0] === '' ? 1 : a[0].localeCompare(b[0])));
+  }, [switches]);
+  const sw = switches?.find((s) => s.id === id);
+  const first = groups[0]?.[1][0]?.id;
+
+  // Sans switch dans l'adresse (ou switch supprimé) : le premier de la liste.
+  useEffect(() => {
+    if (switches && !sw && first) navigate(`/switches/${first}`, true);
+  }, [switches, sw, first]);
+
+  const patch = async (s: Switch, ports: number[], set: PortSet) => {
     try {
-      const saved = await api<Switch>('PATCH', `/api/switches/${sw.id}/ports`, { ports, set });
+      const saved = await api<Switch>('PATCH', `/api/switches/${s.id}/ports`, { ports, set });
       setSwitches((list) => (list ?? []).map((x) => (x.id === saved.id ? saved : x)));
     } catch (e) {
       fail(e);
     }
   };
-
-  const tick = (sw: Switch, ns: number[], on: boolean) =>
-    setTicked((old) => {
-      const s = new Set(old);
-      for (const n of ns) {
-        if (on) s.add(key(sw.id, n));
-        else s.delete(key(sw.id, n));
-      }
-      return s;
-    });
-
-  // Les VLAN utilisés (accès, natif ou taggués) : une puce chacun.
-  const used = useMemo(() => {
-    const ids = new Set<number>();
-    for (const sw of switches ?? [])
-      for (const p of sw.ports) {
-        if (p.mode === 'off') continue;
-        if (p.vlan !== undefined) ids.add(p.vlan);
-        if (p.mode === 'trunk') for (const v of p.tagged) ids.add(v);
-      }
-    return [...ids].sort((a, b) => a - b);
-  }, [switches]);
 
   // Raccordé à : les machines de l'inventaire et les ports des autres switchs.
   const hostOptions = useMemo<DropOption[]>(
@@ -77,112 +68,84 @@ export function Switches({ id }: { id?: string }) {
         }),
     [addrs],
   );
-  const peerOptions = (sw: Switch): DropOption[] =>
-    (switches ?? [])
-      .filter((x) => x.id !== sw.id)
-      .flatMap((x) => x.ports.map((p) => ({ value: `peer:${x.id}:${p.n}`, label: `${x.name} · ${p.name || p.n}`, sub: p.label || undefined, icon: <EthernetPort size={12} />, group: t('Switches') })));
-
-  const needle = q.trim().toLowerCase();
-  const filtering = filter !== 'all' || needle !== '';
-  const matches = (p: SwitchPort) => {
-    if (filter === 'trunk' && p.mode !== 'trunk') return false;
-    if (filter === 'free' && (p.host || p.peer)) return false;
-    if (filter.startsWith('v:')) {
-      const v = Number(filter.slice(2));
-      if (p.mode === 'off' || (p.vlan !== v && !(p.mode === 'trunk' && p.tagged.includes(v)))) return false;
-    }
-    if (needle) {
-      const host = p.host ? addrs.get(p.host) : undefined;
-      const peer = p.peer ? switches?.find((x) => x.id === p.peer!.id) : undefined;
-      const hay = `${p.n} ${p.name} ${p.label} ${p.host ?? ''} ${host?.label ?? ''} ${host?.name ?? ''} ${peer?.name ?? ''}`.toLowerCase();
-      if (!hay.includes(needle)) return false;
-    }
-    return true;
-  };
 
   if (!switches) return <div className="loading">{t('Loading…')}</div>;
-  const portCount = switches.reduce((n, s) => n + s.ports.length, 0);
-  const usedCount = switches.reduce((n, s) => n + s.ports.filter((p) => p.host || p.peer).length, 0);
-  const shown = switches.map((sw) => ({ sw, ports: filtering ? sw.ports.filter(matches) : sw.ports })).filter((x) => !filtering || x.ports.length > 0);
+  const newButton = editable && (
+    <button className="icon-btn ghost" style={{ width: 22, height: 22 }} title={t('New switch')} onClick={() => setEditing('new')}>
+      <Plus size={13} />
+    </button>
+  );
   return (
-    <main className="library">
-      <div className="library-inner full sw-page">
-        <div className="settings-head">
-          <div>
-            <h1>{t('Switches')}</h1>
-            <p className="muted">
-              {[tn(switches.length, '{n} switch', '{n} switches'), tn(portCount, '{n} port', '{n} ports'), tn(usedCount, '{n} used port', '{n} used ports')].join(' · ')}
-            </p>
-          </div>
-          <div className="spacer" />
-          {editable && (
-            <button className="btn primary" onClick={() => setEditing('new')}>
-              <Plus size={14} /> {t('New switch')}
-            </button>
-          )}
-        </div>
-        {switches.length === 0 ? (
-          <Empty icon={EthernetPort} text={t('No switch')} />
-        ) : (
-          <>
-            <div className="media-toolbar">
-              <label className="search">
-                <Search size={14} />
-                <input value={q} placeholder={t('Port, label, machine')} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
-              </label>
-              <div className="asr-chips">
-                <button className={`asr-chip ${filter === 'all' ? 'on' : ''}`} onClick={() => setFilter('all')}>
-                  {t('All ports')}
-                </button>
-                {used.map((v) => {
-                  const x = vlanById(vlans, v);
-                  return (
-                    <button key={v} className={`asr-chip ${filter === `v:${v}` ? 'on' : ''}`} title={x?.subnet} onClick={() => setFilter(`v:${v}`)}>
-                      <span className="vlan-sw" style={vlanStyle(x)} />
-                      {x ? `${v} ${x.name}` : v}
-                    </button>
-                  );
-                })}
-                <button className={`asr-chip ${filter === 'trunk' ? 'on' : ''}`} onClick={() => setFilter('trunk')}>
-                  {t('Trunks')}
-                </button>
-                <button className={`asr-chip ${filter === 'free' ? 'on' : ''}`} onClick={() => setFilter('free')}>
-                  {tc('ports', 'Free')}
-                </button>
-              </div>
+    <>
+      <div className="net-page two">
+        <aside className="lib-nav">
+          {groups.length === 0 && (
+            <div className="lib-nav-section">
+              <span className="grow">{t('Switches')}</span>
+              {newButton}
             </div>
-            {shown.length === 0 && <div className="empty">{t('No match')}</div>}
-            <div className="sw-list">
-              {shown.map(({ sw, ports }) => (
-                <SwitchSection
-                  key={sw.id}
-                  sw={sw}
-                  ports={ports}
-                  defaultOpen={switches.length <= 2 || switches[0].id === sw.id}
-                  focused={sw.id === id}
-                  switches={switches}
-                  vlans={vlans}
-                  addrs={addrs}
-                  agent={sw.snmp ? agents?.find((a) => a.id === sw.snmp) : undefined}
-                  hostOptions={hostOptions}
-                  peerOptions={peerOptions}
-                  editable={editable}
-                  ticked={ticked}
-                  onTick={(ns, on) => tick(sw, ns, on)}
-                  onPatch={(ns, set) => patch(sw, ns, set)}
-                  onEdit={() => setEditing(sw)}
-                />
+          )}
+          {groups.map(([g, list], i) => (
+            <div key={g} className="sys-group">
+              <div className="lib-nav-section">
+                <span className="grow">{g || t('Switches')}</span>
+                {i === 0 && newButton}
+              </div>
+              {list.map((s) => (
+                <div
+                  key={s.id}
+                  className={`lib-nav-item ${s.id === sw?.id ? 'on' : ''}`}
+                  role="link"
+                  tabIndex={0}
+                  aria-current={s.id === sw?.id ? 'page' : undefined}
+                  onClick={() => navigate(`/switches/${s.id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      navigate(`/switches/${s.id}`);
+                    }
+                  }}
+                >
+                  <EthernetPort size={15} />
+                  <span className="grow">{s.name}</span>
+                  <span className="count">{s.ports.length}</span>
+                </div>
               ))}
             </div>
-            {editable && ticked.size > 0 && <BulkBar switches={switches} vlans={vlans} ticked={ticked} onClear={() => setTicked(new Set())} onPatch={patch} />}
-          </>
+          ))}
+        </aside>
+        {sw ? (
+          <SwitchView
+            key={sw.id}
+            sw={sw}
+            switches={switches}
+            vlans={vlans}
+            addrs={addrs}
+            agent={sw.snmp ? agents?.find((a) => a.id === sw.snmp) : undefined}
+            hostOptions={hostOptions}
+            editable={editable}
+            onPatch={(ns, set) => patch(sw, ns, set)}
+            onEdit={() => setEditing(sw)}
+          />
+        ) : (
+          <main className="library">
+            {switches.length === 0 && (
+              <Empty icon={EthernetPort} text={t('No switch')}>
+                {editable && (
+                  <button className="btn primary" onClick={() => setEditing('new')}>
+                    <Plus size={14} /> {t('New switch')}
+                  </button>
+                )}
+              </Empty>
+            )}
+          </main>
         )}
       </div>
       {editing && (
         <SwitchModal
           sw={editing === 'new' ? null : editing}
           agents={agents}
-          groups={[...new Set(switches.map((s) => s.group.trim()).filter(Boolean))].sort()}
+          groups={groups.map(([g]) => g).filter(Boolean)}
           onClose={() => setEditing(null)}
           onSaved={(s) => {
             setEditing(null);
@@ -190,73 +153,72 @@ export function Switches({ id }: { id?: string }) {
           }}
         />
       )}
-    </main>
+    </>
   );
 }
 
-/* ---------- Un switch : en-tête, façade, légende, ports ---------- */
+/* ---------- Un switch : façade, légende, ports ---------- */
 
-function SwitchSection({
+function SwitchView({
   sw,
-  ports,
-  defaultOpen,
-  focused,
   switches,
   vlans,
   addrs,
   agent,
   hostOptions,
-  peerOptions,
   editable,
-  ticked,
-  onTick,
   onPatch,
   onEdit,
 }: {
   sw: Switch;
-  ports: SwitchPort[];
-  defaultOpen: boolean;
-  focused: boolean;
   switches: Switch[];
   vlans: Vlan[] | null;
   addrs: Map<string, Address>;
   agent: SnmpAgent | undefined;
   hostOptions: DropOption[];
-  peerOptions: (sw: Switch) => DropOption[];
   editable: boolean;
-  ticked: Set<string>;
-  onTick: (ns: number[], on: boolean) => void;
   onPatch: (ns: number[], set: PortSet) => Promise<void>;
   onEdit: () => void;
 }) {
-  const [open, setOpen] = useDisplayPref<boolean>(`switch.open.${sw.id}`, defaultOpen);
+  const [q, setQ] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
+  const [ticked, setTicked] = useState<Set<number>>(() => new Set());
   const [goto, setGoto] = useState<{ n: number; seq: number } | null>(null);
-  const ref = useRef<HTMLElement>(null);
   const copper = sw.ports.filter((p) => p.n <= sw.copper);
   const sfp = sw.ports.filter((p) => p.n > sw.copper);
   const blocks: SwitchPort[][] = [];
   for (let i = 0; i < copper.length; i += 12) blocks.push(copper.slice(i, i + 12));
-  const isTicked = (n: number) => ticked.has(key(sw.id, n));
 
-  // Un switch dans l'adresse : l'ouvrir et l'amener en vue.
-  useEffect(() => {
-    if (!focused) return;
-    setOpen(true);
-    requestAnimationFrame(() => ref.current?.scrollIntoView({ block: 'start' }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focused]);
+  const tick = (ns: number[], on: boolean) =>
+    setTicked((old) => {
+      const s = new Set(old);
+      for (const n of ns) {
+        if (on) s.add(n);
+        else s.delete(n);
+      }
+      return s;
+    });
 
-  // Un port choisi sur la façade : sa ligne en vue (une fois la section ouverte).
+  // Un port choisi sur la façade : sa ligne en vue.
   useEffect(() => {
-    if (!goto || !open) return;
-    document.getElementById(`port-${sw.id}-${goto.n}`)?.scrollIntoView({ block: 'nearest' });
-  }, [goto, open, sw.id]);
+    if (goto) document.getElementById(`port-${sw.id}-${goto.n}`)?.scrollIntoView({ block: 'nearest' });
+  }, [goto, sw.id]);
 
   const pick = (n: number) => {
-    if (editable) onTick([n], !isTicked(n));
-    if (!open) setOpen(true);
+    if (editable) tick([n], !ticked.has(n));
     setGoto((g) => ({ n, seq: (g?.seq ?? 0) + 1 }));
   };
+
+  // Les VLAN utilisés (accès, natif ou taggués) : une puce chacun.
+  const used = useMemo(() => {
+    const ids = new Set<number>();
+    for (const p of sw.ports) {
+      if (p.mode === 'off') continue;
+      if (p.vlan !== undefined) ids.add(p.vlan);
+      if (p.mode === 'trunk') for (const v of p.tagged) ids.add(v);
+    }
+    return [...ids].sort((a, b) => a - b);
+  }, [sw.ports]);
 
   // Légende : ports par VLAN, trunks, libres.
   const legend = useMemo(() => {
@@ -271,6 +233,24 @@ function SwitchSection({
     return { per: [...per.entries()].sort((a, b) => a[0] - b[0]), trunk, free };
   }, [sw.ports]);
 
+  const needle = q.trim().toLowerCase();
+  const matches = (p: SwitchPort) => {
+    if (filter === 'trunk' && p.mode !== 'trunk') return false;
+    if (filter === 'free' && (p.host || p.peer)) return false;
+    if (filter.startsWith('v:')) {
+      const v = Number(filter.slice(2));
+      if (p.mode === 'off' || (p.vlan !== v && !(p.mode === 'trunk' && p.tagged.includes(v)))) return false;
+    }
+    if (needle) {
+      const host = p.host ? addrs.get(p.host) : undefined;
+      const peer = p.peer ? switches.find((x) => x.id === p.peer!.id) : undefined;
+      const hay = `${p.n} ${p.name} ${p.label} ${p.host ?? ''} ${host?.label ?? ''} ${host?.name ?? ''} ${peer?.name ?? ''}`.toLowerCase();
+      if (!hay.includes(needle)) return false;
+    }
+    return true;
+  };
+  const ports = filter !== 'all' || needle ? sw.ports.filter(matches) : sw.ports;
+
   const linked = (p: SwitchPort) => !!p.peer || (!!p.host && !!addrs.get(p.host)?.up) || p.learnt.length > 0 || !!p.lldp;
   const portTitle = (p: SwitchPort) => {
     const v = vlanById(vlans, p.vlan);
@@ -281,7 +261,7 @@ function SwitchSection({
     <button
       key={p.n}
       type="button"
-      className={`sw-port ${isSfp ? 'sfp' : ''} ${p.mode === 'trunk' ? 'trunk' : ''} ${p.mode === 'off' ? 'off' : ''} ${isTicked(p.n) ? 'sel' : ''}`}
+      className={`sw-port ${isSfp ? 'sfp' : ''} ${p.mode === 'trunk' ? 'trunk' : ''} ${p.mode === 'off' ? 'off' : ''} ${ticked.has(p.n) ? 'sel' : ''}`}
       style={p.mode !== 'off' ? vlanStyle(vlanById(vlans, p.vlan)) : undefined}
       title={portTitle(p)}
       onClick={() => pick(p.n)}
@@ -292,39 +272,34 @@ function SwitchSection({
   );
 
   const sub = [sw.model, sw.ip, sw.group, sw.sfp ? t('{a} + {b} ports', { a: sw.copper, b: sw.sfp }) : tn(sw.copper, '{n} port', '{n} ports')].filter(Boolean);
-  const vlanOptions: DropOption[] = [{ value: '', label: '—' }, ...(vlans ?? []).map((v) => ({ value: String(v.id), label: `${v.id} · ${v.name}`, icon: <span className="vlan-sw" style={vlanStyle(v)} /> }))];
-  const peers = open ? peerOptions(sw) : [];
-  const allTicked = ports.length > 0 && ports.every((p) => isTicked(p.n));
+  const vlanList: DropOption[] = (vlans ?? []).map((v) => ({ value: String(v.id), label: `${v.id} · ${v.name}`, icon: <span className="vlan-sw" style={vlanStyle(v)} /> }));
+  const peerOptions: DropOption[] = switches
+    .filter((x) => x.id !== sw.id)
+    .flatMap((x) => x.ports.map((p) => ({ value: `peer:${x.id}:${p.n}`, label: `${x.name} · ${p.name || p.n}`, sub: p.label || undefined, icon: <EthernetPort size={12} />, group: t('Switches') })));
+  const allTicked = ports.length > 0 && ports.every((p) => ticked.has(p.n));
   return (
-    <section ref={ref} className={`sw-sec ${open ? '' : 'closed'}`}>
-      <header>
-        <button type="button" className="sw-twirl" title={open ? t('Fold the ports') : t('Unfold the ports')} aria-expanded={open} onClick={() => setOpen(!open)}>
-          <ChevronDown size={14} />
-        </button>
-        <div className="sw-title">
-          <h2>{sw.name}</h2>
-          <p className="muted">
-            {sub.map((s, i) => (
-              <span key={i}>
-                {i > 0 && ' · '}
-                {s === sw.ip ? <span className="mono">{s}</span> : s}
-              </span>
-            ))}
-          </p>
-        </div>
-        <div className="spacer" />
-        {agent && (
-          <span className={`badge ${agent.lastPoll && !agent.lastPoll.ok ? 'warn' : ''}`} title={agent.lastPoll?.message || agent.name}>
-            {agent.lastPoll ? t('SNMP · read {when}', { when: fmtSeen(agent.lastPoll.at) }) : t('SNMP')}
-          </span>
-        )}
-        {editable && (
-          <button type="button" className="btn small" onClick={onEdit}>
-            <Pencil size={13} /> {t('Edit')}
-          </button>
-        )}
-      </header>
-      <div className="sw-body">
+    <main className="library">
+      <div className="library-inner wide sw-page">
+        <PageHead
+          title={sw.name}
+          sub={sub.map((s, i) => (
+            <span key={i}>
+              {i > 0 && ' · '}
+              {s === sw.ip ? <span className="mono">{s}</span> : s}
+            </span>
+          ))}
+        >
+          {agent && (
+            <span className={`badge ${agent.lastPoll && !agent.lastPoll.ok ? 'warn' : ''}`} title={agent.lastPoll?.message || agent.name}>
+              {agent.lastPoll ? t('SNMP · read {when}', { when: fmtSeen(agent.lastPoll.at) }) : t('SNMP')}
+            </span>
+          )}
+          {editable && (
+            <button type="button" className="btn" onClick={onEdit}>
+              <Pencil size={14} /> {t('Edit')}
+            </button>
+          )}
+        </PageHead>
         <div className="sw-face">
           {blocks.map((b, i) => (
             <div key={i} className="sw-block">
@@ -356,15 +331,42 @@ function SwitchSection({
             </span>
           )}
         </div>
-        {open && (
+        <div className="media-toolbar">
+          <label className="search">
+            <Search size={14} />
+            <input value={q} placeholder={t('Port, label, machine')} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
+          </label>
+          <div className="asr-chips">
+            <button className={`asr-chip ${filter === 'all' ? 'on' : ''}`} onClick={() => setFilter('all')}>
+              {t('All ports')}
+            </button>
+            {used.map((v) => {
+              const x = vlanById(vlans, v);
+              return (
+                <button key={v} className={`asr-chip ${filter === `v:${v}` ? 'on' : ''}`} title={x?.subnet} onClick={() => setFilter(`v:${v}`)}>
+                  <span className="vlan-sw" style={vlanStyle(x)} />
+                  {x ? `${v} ${x.name}` : v}
+                </button>
+              );
+            })}
+            <button className={`asr-chip ${filter === 'trunk' ? 'on' : ''}`} onClick={() => setFilter('trunk')}>
+              {t('Trunks')}
+            </button>
+            <button className={`asr-chip ${filter === 'free' ? 'on' : ''}`} onClick={() => setFilter('free')}>
+              {tc('ports', 'Free')}
+            </button>
+          </div>
+        </div>
+        {ports.length === 0 ? (
+          <div className="empty">{t('No match')}</div>
+        ) : (
           <table className="pt">
             <colgroup>
               {editable && <col style={{ width: 36 }} />}
               <col style={{ width: 120 }} />
-              <col style={{ width: '17%' }} />
+              <col style={{ width: '16%' }} />
               <col style={{ width: 156 }} />
-              <col style={{ width: '14%' }} />
-              <col style={{ width: '18%' }} />
+              <col style={{ width: '26%' }} />
               <col style={{ width: '20%' }} />
               <col />
             </colgroup>
@@ -372,14 +374,13 @@ function SwitchSection({
               <tr>
                 {editable && (
                   <th>
-                    <input type="checkbox" className="tick" checked={allTicked} title={t('Tick all')} onChange={(e) => onTick(ports.map((p) => p.n), e.target.checked)} />
+                    <input type="checkbox" className="tick" checked={allTicked} title={t('Tick all')} onChange={(e) => tick(ports.map((p) => p.n), e.target.checked)} />
                   </th>
                 )}
                 <th>{t('Port')}</th>
                 <th>{t('Label')}</th>
                 <th>{t('Mode')}</th>
-                <th>{t('Native VLAN')}</th>
-                <th>{t('Tagged VLANs')}</th>
+                <th>{t('VLAN')}</th>
                 <th>{t('Connected to')}</th>
                 <th>{t('MAC / LLDP')}</th>
               </tr>
@@ -393,20 +394,21 @@ function SwitchSection({
                   switches={switches}
                   vlans={vlans}
                   addrs={addrs}
-                  vlanOptions={vlanOptions}
+                  vlanList={vlanList}
                   hostOptions={hostOptions}
-                  peerOptions={peers}
+                  peerOptions={peerOptions}
                   editable={editable}
-                  ticked={isTicked(p.n)}
-                  onTick={(on) => onTick([p.n], on)}
+                  ticked={ticked.has(p.n)}
+                  onTick={(on) => tick([p.n], on)}
                   onPatch={(set) => onPatch([p.n], set)}
                 />
               ))}
             </tbody>
           </table>
         )}
+        {editable && ticked.size > 0 && <BulkBar sw={sw} vlans={vlans} vlanList={vlanList} ticked={ticked} onClear={() => setTicked(new Set())} onPatch={onPatch} />}
       </div>
-    </section>
+    </main>
   );
 }
 
@@ -420,13 +422,30 @@ const modeOptions = () => [
   { value: 'off' as PortMode, label: tc('mode', 'Off') },
 ];
 
+/** Une pastille de VLAN taggué ; la croix l'enlève. */
+function TaggedTag({ id, vlans, onRemove }: { id: number; vlans: Vlan[] | null; onRemove?: () => void }) {
+  const v = vlanById(vlans, id);
+  return (
+    <span className="vlan-tag" style={vlanStyle(v)} title={v?.name}>
+      <span className="vlan-sw" />
+      <b>{id}</b>
+      {v?.name ? ` ${v.name}` : null}
+      {onRemove && (
+        <button type="button" className="tag-x" title={t('Remove')} onClick={onRemove}>
+          <X size={10} />
+        </button>
+      )}
+    </span>
+  );
+}
+
 function PortRow({
   sw,
   p,
   switches,
   vlans,
   addrs,
-  vlanOptions,
+  vlanList,
   hostOptions,
   peerOptions,
   editable,
@@ -439,7 +458,7 @@ function PortRow({
   switches: Switch[];
   vlans: Vlan[] | null;
   addrs: Map<string, Address>;
-  vlanOptions: DropOption[];
+  vlanList: DropOption[];
   hostOptions: DropOption[];
   peerOptions: DropOption[];
   editable: boolean;
@@ -448,6 +467,7 @@ function PortRow({
   onPatch: (set: PortSet) => Promise<void>;
 }) {
   const vlan = vlanById(vlans, p.vlan);
+  const trunk = p.mode === 'trunk';
   const peerSw = p.peer ? switches.find((x) => x.id === p.peer!.id) : undefined;
   const host = p.host ? addrs.get(p.host) : undefined;
   const linkValue = p.peer ? `peer:${p.peer.id}:${p.peer.port}` : p.host ? `host:${p.host}` : null;
@@ -468,11 +488,63 @@ function PortRow({
     if (kind === 'host') void onPatch({ host: a, peer: null });
     else void onPatch({ peer: { id: a, port: Number(b) }, host: null });
   };
+  const setVlan = (v: string) => void onPatch({ vlan: v ? Number(v) : null });
 
-  const addable = (vlans ?? []).filter((v) => !p.tagged.includes(v.id)).map((v) => ({ value: String(v.id), label: `${v.id} · ${v.name}`, icon: <span className="vlan-sw" style={vlanStyle(v)} /> }));
+  // Accès : le VLAN. Trunk : les VLAN taggués, puis le VLAN natif s'il y en a un.
+  let vlanCell: React.ReactNode = null;
+  if (p.mode === 'access') {
+    vlanCell = editable ? (
+      <Dropdown className="cell" value={p.vlan === undefined ? '' : String(p.vlan)} options={[{ value: '', label: '—' }, ...vlanList]} onChange={setVlan} />
+    ) : (
+      p.vlan !== undefined && (
+        <span className="cell-kind">
+          <span className="vlan-sw" style={vlanStyle(vlan)} />
+          {vlan ? `${p.vlan} · ${vlan.name}` : p.vlan}
+        </span>
+      )
+    );
+  } else if (trunk) {
+    const addable = vlanList.filter((o) => !p.tagged.includes(Number(o.value)));
+    const nativeFace =
+      p.vlan !== undefined ? (
+        <>
+          <span className="vlan-sw" style={vlanStyle(vlan)} />
+          {tc('vlan', 'native')} <b>{p.vlan}</b>
+        </>
+      ) : (
+        tc('vlan', 'native')
+      );
+    vlanCell = (
+      <div className="tagged">
+        {p.tagged.map((id) => (
+          <TaggedTag key={id} id={id} vlans={vlans} onRemove={editable ? () => void onPatch({ tagged: p.tagged.filter((x) => x !== id) }) : undefined} />
+        ))}
+        {editable && addable.length > 0 && (
+          <Dropdown className="add" value={null} placeholder="+" title={t('Add a VLAN')} options={addable} onChange={(v) => void onPatch({ tagged: [...p.tagged, Number(v)].sort((a, b) => a - b) })} />
+        )}
+        {editable ? (
+          <Dropdown
+            className={`native ${p.vlan === undefined ? 'unset' : ''}`}
+            value={p.vlan === undefined ? '' : String(p.vlan)}
+            title={vlan ? `${t('Native VLAN')} · ${vlan.name}` : t('Native VLAN')}
+            options={[{ value: '', label: t('None') }, ...vlanList]}
+            face={nativeFace}
+            onChange={setVlan}
+          />
+        ) : (
+          p.vlan !== undefined && (
+            <span className="native-tag" title={vlan ? `${t('Native VLAN')} · ${vlan.name}` : t('Native VLAN')}>
+              {nativeFace}
+            </span>
+          )
+        )}
+      </div>
+    );
+  }
+
   const learnt = p.lldp ? t('LLDP: {name} {port}', { name: p.lldp.name, port: p.lldp.port }) : p.learnt.length ? p.learnt[0] + (p.learnt.length > 1 ? ` +${p.learnt.length - 1}` : '') : '';
   return (
-    <tr id={`port-${sw.id}-${p.n}`} className={`${ticked ? 'sel' : ''} ${p.mode === 'off' ? 'off' : ''}`} style={p.mode !== 'off' ? vlanStyle(vlan) : undefined}>
+    <tr id={`port-${sw.id}-${p.n}`} className={`${ticked ? 'sel' : ''} ${p.mode === 'off' ? 'off' : ''} ${trunk ? 'trunk' : ''}`} style={p.mode !== 'off' ? vlanStyle(vlan) : undefined}>
       {editable && (
         <td>
           <input type="checkbox" className="tick" checked={ticked} aria-label={p.name || String(p.n)} onChange={(e) => onTick(e.target.checked)} />
@@ -485,43 +557,7 @@ function PortRow({
         <InlineText value={p.label} placeholder={t('Label')} editable={editable} onSave={(label) => void onPatch({ label })} />
       </td>
       <td>{editable ? <Segmented value={p.mode} options={modeOptions()} onChange={(mode) => void onPatch({ mode })} /> : modeLabel(p.mode)}</td>
-      <td>
-        {p.mode !== 'off' &&
-          (editable ? (
-            <Dropdown className="cell" value={p.vlan === undefined ? '' : String(p.vlan)} options={vlanOptions} onChange={(v) => void onPatch({ vlan: v ? Number(v) : null })} />
-          ) : (
-            p.vlan !== undefined && (
-              <span className="cell-kind">
-                <span className="vlan-sw" style={vlanStyle(vlan)} />
-                {vlan ? `${p.vlan} · ${vlan.name}` : p.vlan}
-              </span>
-            )
-          ))}
-      </td>
-      <td>
-        {p.mode === 'trunk' && (
-          <div className="tagged">
-            {p.tagged.map((id) => {
-              const v = vlanById(vlans, id);
-              return (
-                <span key={id} className="vlan-tag" style={vlanStyle(v)} title={v?.name}>
-                  <span className="vlan-sw" />
-                  <b>{id}</b>
-                  {v?.name ? ` ${v.name}` : null}
-                  {editable && (
-                    <button type="button" className="tag-x" title={t('Remove')} onClick={() => void onPatch({ tagged: p.tagged.filter((x) => x !== id) })}>
-                      <X size={10} />
-                    </button>
-                  )}
-                </span>
-              );
-            })}
-            {editable && addable.length > 0 && (
-              <Dropdown className="add" value={null} placeholder="+" title={t('Add a VLAN')} options={addable} onChange={(v) => void onPatch({ tagged: [...p.tagged, Number(v)].sort((a, b) => a - b) })} />
-            )}
-          </div>
-        )}
-      </td>
+      <td>{vlanCell}</td>
       <td>
         {editable ? (
           (linkValue || p.mode !== 'off') && <Dropdown className="cell" value={linkValue} placeholder={t('Connect…')} options={links} onChange={link} />
@@ -541,43 +577,48 @@ function PortRow({
 /* ---------- Ports cochés : une barre pour tous les changer ---------- */
 
 function BulkBar({
-  switches,
+  sw,
   vlans,
+  vlanList,
   ticked,
   onClear,
   onPatch,
 }: {
-  switches: Switch[];
+  sw: Switch;
   vlans: Vlan[] | null;
-  ticked: Set<string>;
+  vlanList: DropOption[];
+  ticked: Set<number>;
   onClear: () => void;
-  onPatch: (sw: Switch, ports: number[], set: PortSet) => Promise<void>;
+  onPatch: (ports: number[], set: PortSet) => Promise<void>;
 }) {
   const [mode, setMode] = useState<PortMode | null>(null);
   const [vlan, setVlan] = useState<string | null>(null);
+  const [tagged, setTagged] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
-  const groups = switches.map((sw) => ({ sw, ports: sw.ports.filter((p) => ticked.has(key(sw.id, p.n))) })).filter((g) => g.ports.length > 0);
-  const several = groups.length > 1;
-  const names = groups.flatMap((g) => g.ports.map((p) => (several ? `${g.sw.name} ${p.name || p.n}` : p.name || String(p.n)))).join(', ');
-  const vlanOptions: DropOption[] = (vlans ?? []).map((v) => ({ value: String(v.id), label: `${v.id} · ${v.name}`, icon: <span className="vlan-sw" style={vlanStyle(v)} /> }));
+  const ports = sw.ports.filter((p) => ticked.has(p.n));
+  const names = ports.map((p) => p.name || String(p.n)).join(', ');
+  const trunk = mode === 'trunk';
+  const ready = mode !== null || vlan !== null;
 
   const apply = async () => {
     const set: PortSet = {};
     if (mode) set.mode = mode;
-    if (vlan !== null) set.vlan = Number(vlan);
+    if (trunk) {
+      if (tagged.length) set.tagged = tagged;
+    } else if (vlan !== null) set.vlan = Number(vlan);
     setBusy(true);
-    for (const g of groups)
-      await onPatch(
-        g.sw,
-        g.ports.map((p) => p.n),
-        set,
-      );
+    await onPatch(
+      ports.map((p) => p.n),
+      set,
+    );
     setBusy(false);
     setMode(null);
     setVlan(null);
+    setTagged([]);
     onClear();
   };
 
+  const addable = vlanList.filter((o) => !tagged.includes(Number(o.value)));
   return (
     <div className="bulk">
       <b>{tn(ticked.size, '{n} ticked port', '{n} ticked ports')}</b>
@@ -587,12 +628,21 @@ function BulkBar({
       <div className="spacer" />
       <span className="muted">{t('Mode')}</span>
       <Segmented value={mode ?? ('' as PortMode)} options={modeOptions()} onChange={setMode} />
-      <span className="muted">{t('VLAN')}</span>
-      <Dropdown value={vlan} options={vlanOptions} onChange={setVlan} />
+      <span className="muted">{trunk ? t('Tagged VLANs') : t('VLAN')}</span>
+      {trunk ? (
+        <div className="tagged bulk-tagged">
+          {tagged.map((id) => (
+            <TaggedTag key={id} id={id} vlans={vlans} onRemove={() => setTagged(tagged.filter((x) => x !== id))} />
+          ))}
+          {addable.length > 0 && <Dropdown className="add" value={null} placeholder="+" title={t('Add a VLAN')} options={addable} onChange={(v) => setTagged([...tagged, Number(v)].sort((a, b) => a - b))} />}
+        </div>
+      ) : (
+        <Dropdown value={vlan} options={vlanList} onChange={setVlan} />
+      )}
       <button type="button" className="btn ghost" onClick={onClear}>
         {t('Untick')}
       </button>
-      <button type="button" className="btn primary" disabled={busy || (!mode && vlan === null)} onClick={() => void apply()}>
+      <button type="button" className="btn primary" disabled={busy || !ready} onClick={() => void apply()}>
         <Check size={14} /> {t('Apply')}
       </button>
     </div>

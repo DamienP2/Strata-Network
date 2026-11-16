@@ -280,8 +280,6 @@ export const network: Record<string, string> = {
   "All ports": "Tous les ports",
   "Trunks": "Trunks",
   "ports|Free": "Libres",
-  "Fold the ports": "Replier les ports",
-  "Unfold the ports": "Déplier les ports",
   "SNMP · read {when}": "SNMP · lu {when}",
   "Tick all": "Tout cocher",
   "MAC / LLDP": "MAC / LLDP",
@@ -295,4 +293,5 @@ export const network: Record<string, string> = {
   "Attach to…": "Rattacher à…",
   "Attach {name} to…": "Rattacher {name} à…",
   "None": "Aucun",
+  "vlan|native": "natif",
 };

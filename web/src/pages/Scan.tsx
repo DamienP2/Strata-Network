@@ -13,11 +13,54 @@ import { Empty } from '../ui/Empty';
 import { useDisplayPref } from '../displayPrefs';
 import { intToIp, ipToInt, parseRange, validIp, type Range } from '../net/ip';
 import { KIND_ICON, KINDS, copyText, fail, fmtMs, fmtSeen, hasWeb, ipState, kindLabel, useList, vlanById, vlanMismatch, type IpState } from '../net/model';
-import { InlineText, PortChips, vlanStyle } from '../net/parts';
+import { FitChips, InlineText, PortChips, vlanStyle } from '../net/parts';
+import { Splitter } from '../ui/Splitter';
 import type { Address, Kind, Network, Switch, SwitchPort, Vlan } from '../net/types';
 
 type Chip = 'all' | 'used' | 'free' | 'offline' | 'web' | 'new' | 'watched';
 const ROW = 32;
+
+/** Les colonnes de la liste qui se redimensionnent (Actions garde sa largeur). */
+type ColId = 'state' | 'ip' | 'label' | 'kind' | 'dns' | 'mac' | 'ports' | 'plug';
+type ColWidths = Partial<Record<ColId, number>>;
+const COLS: { id: ColId; w: number; head: () => string }[] = [
+  { id: 'state', w: 46, head: () => t('State') },
+  { id: 'ip', w: 176, head: () => t('IP') },
+  { id: 'label', w: 180, head: () => t('Label') },
+  { id: 'kind', w: 124, head: () => t('Type') },
+  { id: 'dns', w: 140, head: () => t('DNS name') },
+  { id: 'mac', w: 140, head: () => t('MAC') },
+  { id: 'ports', w: 260, head: () => t('Ports') },
+  { id: 'plug', w: 170, head: () => t('Connection') },
+];
+const ACTS_W = 98;
+const COL_MIN = 36;
+const COL_MAX = 1200;
+const FIT_MAX = 480;
+
+/**
+ * La largeur qu'il faut à chaque colonne : le plus large de son titre et des cellules dessinées.
+ * Mesurée sur une copie du tableau en mise en page automatique, toutes les puces de ports visibles.
+ */
+function fitColumns(box: HTMLElement): ColWidths {
+  const table = box.querySelector<HTMLTableElement>(':scope > table.xt');
+  if (!table) return {};
+  const clone = table.cloneNode(true) as HTMLTableElement;
+  clone.querySelector('colgroup')?.remove();
+  clone.querySelectorAll('tr.pad, .splitter, .port-more').forEach((e) => e.remove());
+  clone.querySelectorAll('.fit-hid').forEach((e) => e.classList.remove('fit-hid'));
+  clone.setAttribute('aria-hidden', 'true');
+  Object.assign(clone.style, { position: 'absolute', left: '0', top: '0', visibility: 'hidden', width: 'max-content', tableLayout: 'auto' });
+  box.appendChild(clone);
+  const ths = clone.querySelectorAll<HTMLElement>('thead th');
+  const out: ColWidths = {};
+  COLS.forEach((c, i) => {
+    const th = ths[i];
+    if (th) out[c.id] = Math.min(FIT_MAX, Math.max(COL_MIN, Math.ceil(th.getBoundingClientRect().width) + 2));
+  });
+  clone.remove();
+  return out;
+}
 
 export function Scan({ networkId, ip }: { networkId?: string; ip?: string }) {
   const user = useApp((s) => s.auth?.user);
@@ -490,18 +533,42 @@ function IpTable({
   const box = useRef<HTMLDivElement>(null);
   const [top, setTop] = useState(0);
   const [height, setHeight] = useState(900);
+  const [width, setWidth] = useState(0);
   const [pop, setPop] = useState<{ n: number; el: HTMLElement } | null>(null);
   const [scanning, setScanning] = useState<Set<number>>(() => new Set());
+  const [saved, setSaved] = useDisplayPref<ColWidths | null>('scan.cols', null);
   const clicked = useRef<number | null>(null);
 
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setHeight(el.clientHeight));
+    const size = () => {
+      setHeight(el.clientHeight);
+      setWidth(el.clientWidth);
+    };
+    const ro = new ResizeObserver(size);
     ro.observe(el);
-    setHeight(el.clientHeight);
+    size();
     return () => ro.disconnect();
   }, []);
+
+  // Largeurs des colonnes : gardées pour l'utilisateur ; la première fois, ajustées au contenu.
+  const widths = Object.fromEntries(COLS.map((c) => [c.id, Math.max(COL_MIN, saved?.[c.id] ?? c.w)])) as Record<ColId, number>;
+  // The space left goes to the last column (Actions, right-aligned), so every handle follows the mouse.
+  const sum = COLS.reduce((s, c) => s + widths[c.id], editable ? ACTS_W : 0);
+  const spare = Math.max(0, width - sum);
+  const last = COLS[COLS.length - 1].id;
+  const shown = editable ? widths : { ...widths, [last]: widths[last] + spare };
+  const actsW = ACTS_W + (editable ? spare : 0);
+  const tableWidth = sum + spare;
+  const fitted = useRef(false);
+  useLayoutEffect(() => {
+    if (saved || fitted.current || !box.current) return;
+    fitted.current = true;
+    setSaved({ ...widths, ...fitColumns(box.current) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saved]);
+  const setCol = (id: ColId, w: number) => setSaved((old) => ({ ...widths, ...old, [id]: w }));
 
   // Une adresse choisie ailleurs (bandeau, fiche, alerte, prochaine IP libre) : la faire défiler en vue.
   useEffect(() => {
@@ -555,28 +622,31 @@ function IpTable({
   const popAddr = pop ? addrs.get(pop.n) : undefined;
   return (
     <div className="card-table fill" ref={box} onScroll={(e) => setTop(e.currentTarget.scrollTop)}>
-      <table className="xt">
+      <table className="xt" style={{ width: tableWidth }}>
         <colgroup>
-          <col style={{ width: 46 }} />
-          <col style={{ width: 176 }} />
-          <col style={{ width: 140 }} />
-          <col style={{ width: 124 }} />
-          <col style={{ width: 140 }} />
-          <col style={{ width: 140 }} />
-          <col style={{ width: 240 }} />
-          <col />
-          {editable && <col style={{ width: 98 }} />}
+          {COLS.map((c) => (
+            <col key={c.id} style={{ width: shown[c.id] }} />
+          ))}
+          {editable && <col style={{ width: actsW }} />}
         </colgroup>
         <thead>
           <tr>
-            <th>{t('State')}</th>
-            <th>{t('IP')}</th>
-            <th>{t('Label')}</th>
-            <th>{t('Type')}</th>
-            <th>{t('DNS name')}</th>
-            <th>{t('MAC')}</th>
-            <th>{t('Ports')}</th>
-            <th>{t('Connection')}</th>
+            {COLS.map((c, i) => (
+              <th key={c.id}>
+                {c.head()}
+                {(editable || i < COLS.length - 1) && (
+                  <Splitter
+                    axis="x"
+                    edge="right"
+                    value={shown[c.id]}
+                    min={COL_MIN}
+                    max={COL_MAX}
+                    onChange={(w) => setCol(c.id, w)}
+                    onReset={() => box.current && setCol(c.id, fitColumns(box.current)[c.id] ?? c.w)}
+                  />
+                )}
+              </th>
+            ))}
             {editable && <th className="right">{t('Actions')}</th>}
           </tr>
         </thead>
@@ -741,7 +811,7 @@ function IpRow({
       </td>
       <td>{a?.name || <span className="muted2">—</span>}</td>
       <td title={a?.vendor}>{a?.mac && <span className="mac">{a.mac}</span>}</td>
-      <td>{a && a.ports.length > 0 && <PortChips a={a} max={3} />}</td>
+      <td>{a && a.ports.length > 0 && <FitChips a={a} />}</td>
       <td>
         {editable ? (
           <div
