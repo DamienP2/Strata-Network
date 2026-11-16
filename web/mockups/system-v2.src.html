@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Strata Network — système : notifications et SNMP</title>
+<!--CSS-->
+<link rel="stylesheet" href="../src/styles.css" />
+<link rel="stylesheet" href="../src/styles-light.css" />
+<!--/CSS-->
+<style>
+/* ── Maquette seulement ── */
+[hidden] { display: none !important; }
+.mk-switch { position: fixed; left: 18px; bottom: 16px; z-index: 400; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--line-2); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); font-size: 12px; color: var(--text-2); }
+
+.page-2 { height: 100%; display: grid; grid-template-columns: 240px minmax(0, 1fr); }
+.page-2 > .library { min-width: 0; }
+.library-inner.full { max-width: none; padding-left: 20px; padding-right: 20px; }
+.ip { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.muted2 { color: var(--text-3); }
+
+/* En ligne : l'interrupteur et son état dans l'en-tête */
+.live { display: inline-flex; align-items: center; gap: 10px; height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); }
+.live.on { border-color: color-mix(in srgb, var(--pvw) 55%, transparent); background: color-mix(in srgb, var(--pvw) 8%, var(--panel)); }
+.live .check { color: var(--text); font-weight: 600; }
+.live-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+.live-state::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--pvw); box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18); animation: blink 2s infinite; }
+.live .dd-btn { width: 76px; height: 24px; }
+
+/* Ce que le switch dit de lui-même */
+.sys-strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.sys-strip > div { padding: 10px 14px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.sys-strip > div + div { border-left: 1px solid var(--line); }
+.sys-strip .set-label { font-size: 11px; }
+.sys-strip b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sys-strip b.mono { font: 600 12.5px var(--mono); }
+
+/* Écarts entre l'inventaire et le switch */
+.diffs { display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 14px; border-radius: 10px; background: rgba(245, 165, 36, 0.1); border: 1px solid rgba(245, 165, 36, 0.45); color: var(--text); font-size: 12.5px; }
+.diffs svg { color: var(--warn); flex: none; }
+.diff { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 10px; background: rgba(245, 165, 36, 0.15); color: var(--warn); cursor: help; }
+.pt tr.has-diff td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.take { height: 22px; padding: 0 7px; font-size: 11px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel-3); color: var(--text-2); cursor: pointer; }
+.take:hover { color: var(--text); border-color: var(--text-3); }
+
+/* Façade en ligne : lien allumé / éteint, et la charge du port en bas de chaque prise */
+.sw-face.live-face .sw-port .link { background: #22c55e; box-shadow: 0 0 5px #22c55e; }
+.sw-face.live-face .sw-port.down { opacity: 0.55; }
+.sw-face.live-face .sw-port.down .link { background: #4b5068; box-shadow: none; }
+.sw-port .load { position: absolute; left: 2px; right: 2px; bottom: 2px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.sw-port .load i { position: absolute; inset: 0 auto 0 0; background: #e6e8f2; border-radius: 2px; }
+.sw-port .load i.hot { background: #f5a524; }
+
+/* Colonnes en ligne du tableau des ports */
+.lk { display: inline-flex; align-items: center; gap: 6px; font: 600 11.5px var(--mono); }
+.lk::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--line-2); }
+.lk.up { color: var(--text); }
+.lk.up::before { background: var(--pvw); box-shadow: 0 0 6px var(--pvw); }
+.lk.down { color: var(--text-3); font-weight: 500; }
+.lk.admin-off::before { background: none; box-shadow: inset 0 0 0 1.5px var(--line-2); }
+.rate { display: flex; align-items: center; gap: 8px; }
+.rate svg { flex: none; color: var(--accent); }
+.rate .io { display: flex; flex-direction: column; line-height: 1.15; font: 11px var(--mono); }
+.rate .io span:first-child { color: var(--text); }
+.rate .io span:last-child { color: var(--text-3); }
+.err { font: 11.5px var(--mono); color: var(--text-3); }
+.err.bad { color: var(--live); font-weight: 600; }
+.pt td.num, .pt th.num { text-align: right; }
+.vlan-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 1px 7px 1px 5px; border-radius: 10px; white-space: nowrap; background: color-mix(in srgb, var(--vlan) 16%, transparent); color: var(--text); }
+.vlan-tag .vlan-sw { width: 8px; height: 8px; border-radius: 2px; background: var(--vlan); }
+.vlan-tag b { font-family: var(--mono); font-weight: 600; }
+.vlan-sw { width: 10px; height: 10px; border-radius: 3px; background: var(--vlan, var(--text-3)); flex: none; display: inline-block; }
+.ed { display: flex; align-items: center; gap: 6px; height: 26px; margin: 0 -6px; padding: 0 6px; border-radius: 6px; border: 1px solid transparent; overflow: hidden; }
+tr:hover .ed { border-color: var(--line); background: var(--panel-3); }
+.ed .ph { color: var(--text-3); }
+.pt .segmented button { padding: 2px 7px; font-size: 11px; }
+.tick { appearance: none; width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--line-2); background: var(--panel-3); cursor: pointer; margin: 0; vertical-align: middle; }
+.descr { color: var(--text-3); font-size: 11.5px; margin-left: 6px; }
+
+/* ── Ajouts : onglets, voisins, optiques, multicast, santé, alertes ── */
+.tabpane { display: none; flex-direction: column; gap: 12px; }
+.tabpane.on { display: flex; }
+.sys-strip.health { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.hv { display: flex; align-items: center; gap: 6px; }
+.hv .perf-bar { flex: 1; }
+.ok-t { color: var(--pvw); } .warn-t { color: var(--warn); } .bad-t { color: var(--live); }
+.info-bar { display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 14px; border-radius: 10px; background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); font-size: 12.5px; }
+.info-bar svg { color: var(--accent-2); flex: none; }
+/* Façade : agrégats, STP, optique */
+.sw-face { position: relative; padding-bottom: 28px; gap: 12px; overflow: visible; }
+.sw-face .sw-port.sfp { width: 34px; }
+.po-mark { position: absolute; bottom: 8px; height: 12px; border: 1.5px solid #8fa3ff; border-top: none; border-radius: 0 0 4px 4px; }
+.po-mark span { position: absolute; left: 50%; bottom: -8px; transform: translateX(-50%); background: #10121a; padding: 0 3px; font: 600 10px/1 var(--mono); color: #bfcaff; }
+.sw-port .stp { position: absolute; inset: 0; display: grid; place-items: center; color: #ff8aa0; font-size: 14px; font-weight: 800; background: rgba(16, 18, 26, 0.55); border-radius: inherit; }
+.sw-port .opt { position: absolute; top: 2px; left: 2px; width: 5px; height: 5px; border-radius: 50%; background: #f5a524; box-shadow: 0 0 4px #f5a524; }
+.sw-port.q { width: 42px; height: 22px; border-radius: 3px; border-color: #8fa3ff; }
+.sw-qsfp { display: grid; grid-template-rows: repeat(2, 22px); grid-auto-flow: column; gap: 9px 4px; }
+/* Voisin, agrégat, STP dans le tableau */
+.nb { display: inline-flex; align-items: center; gap: 6px; }
+.nb svg { color: var(--accent-2); }
+.nb small { font: 10.5px var(--mono); color: var(--text-3); padding: 0 4px; border: 1px solid var(--line-2); border-radius: 4px; }
+.tagx { font: 600 11px var(--mono); padding: 1px 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-2); }
+.tagx.blk { background: var(--live-soft); color: #ff8aa0; }
+:root[data-theme='light'] .tagx.blk { color: var(--t-red); }
+.exp { width: 22px; height: 22px; border: none; background: none; color: var(--text-3); cursor: pointer; border-radius: 5px; }
+.exp:hover { background: var(--panel-3); color: var(--text); }
+tr.open .exp svg { transform: rotate(180deg); }
+tr.chart td { height: auto; padding: 0; background: var(--panel-2) !important; }
+.chart-box { padding: 12px 14px 14px 52px; display: flex; flex-direction: column; gap: 8px; }
+.chart-head { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--text-2); }
+.chart-head b { color: var(--text); }
+.chart-svg { width: 100%; height: 120px; }
+.chart-svg .in { fill: color-mix(in srgb, var(--accent) 22%, transparent); stroke: var(--accent); stroke-width: 1.5; }
+.chart-svg .out { fill: none; stroke: var(--pvw); stroke-width: 1.5; }
+.chart-svg .grid { stroke: var(--line); stroke-width: 1; }
+.chart-svg text { fill: var(--text-3); font: 10.5px var(--mono); }
+/* Optiques */
+.dbm { display: flex; align-items: center; gap: 8px; }
+.dbm .scale { position: relative; width: 120px; height: 6px; border-radius: 4px; background: linear-gradient(90deg, var(--live) 0 18%, var(--warn) 18% 30%, var(--pvw) 30% 85%, var(--warn) 85% 100%); opacity: 0.55; }
+.dbm .scale i { position: absolute; top: -3px; width: 3px; height: 12px; border-radius: 2px; background: var(--text); }
+.dbm span { font: 600 11.5px var(--mono); min-width: 64px; text-align: right; }
+/* Multicast */
+.ports-list { display: flex; gap: 4px; flex-wrap: nowrap; overflow: hidden; }
+.pchip { font: 600 11px var(--mono); padding: 1px 6px; border-radius: 10px; background: var(--panel-3); color: var(--text-2); }
+.pchip.router { background: rgba(245, 165, 36, 0.15); color: var(--warn); }
+/* Santé */
+.health-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.hcard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.hcard h3 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
+.hcard .big { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.hrow { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.hrow .grow { flex: 1; color: var(--text-2); }
+.hrow .mono { font-family: var(--mono); }
+/* Alertes */
+.rules { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.rule { display: grid; grid-template-columns: minmax(0, 1fr) 320px 60px; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.rule:last-child { border-bottom: none; }
+.rule b { font-size: 13px; font-weight: 600; }
+.rule .muted { font-size: 12px; }
+.rule .num-in { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); justify-content: flex-end; }
+.rule .num-in input { width: 64px; min-height: 0; height: 28px; text-align: right; font-family: var(--mono); }
+.star { color: var(--text-3); cursor: pointer; }
+body.poe .sys-strip.health { grid-template-columns: repeat(9, minmax(0, 1fr)); }
+.sw-port.rj { width: 26px; height: 26px; }
+body:not(.poe) .poe-only, body.poe .no-poe { display: none !important; }
+.poe-w { font: 600 11.5px var(--mono); display: inline-flex; align-items: center; gap: 4px; }
+.poe-w svg { color: var(--key); }
+.sw-port .poe { position: absolute; bottom: 1px; right: 2px; width: 6px; height: 6px; color: var(--key); font-size: 8px; line-height: 6px; }
+.star.on { color: var(--key); }
+</style>
+<style>
+/* ── Multicast ── */
+.tchip { font: 600 11px var(--mono); padding: 1px 7px; border-radius: 10px; }
+.tchip.v { background: var(--accent-soft); color: var(--accent-2); }
+.tchip.a { background: rgba(45, 212, 191, 0.14); color: #2dd4bf; }
+.tchip.d { background: rgba(232, 121, 249, 0.14); color: #e879f9; }
+.tchip.ts { background: var(--panel-3); color: var(--text-2); }
+:root[data-theme='light'] .tchip.a { color: #0f766e; } :root[data-theme='light'] .tchip.d { color: #a21caf; }
+.unk { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px dashed var(--line-2); color: var(--text-3); margin-left: 6px; }
+.pair { font: 600 11px var(--mono); display: inline-flex; gap: 3px; }
+.pair i { font-style: normal; width: 18px; text-align: center; border-radius: 4px; padding: 1px 0; }
+.pair .r { background: rgba(45, 212, 191, 0.18); color: #2dd4bf; } .pair .b { background: rgba(232, 121, 249, 0.18); color: #e879f9; }
+.pair .x { background: var(--live-soft); color: #ff8aa0; text-decoration: line-through; }
+.rx { display: flex; align-items: center; gap: 6px; }
+.rx b { font-variant-numeric: tabular-nums; min-width: 18px; }
+.src small { color: var(--text-3); font-family: var(--mono); margin-left: 6px; }
+tr.detail td { height: auto; padding: 0; background: var(--panel-2) !important; white-space: normal; }
+.det { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 16px 40px; }
+.path { display: flex; align-items: center; gap: 0; flex-wrap: nowrap; overflow-x: auto; padding: 4px 0 8px; }
+.node { flex: none; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; min-width: 150px; }
+.node b { font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+.node .ip { font-size: 11px; color: var(--text-3); }
+.node .pl { display: flex; flex-wrap: wrap; gap: 4px; max-width: 260px; }
+.node.src-n { border-color: color-mix(in srgb, var(--pvw) 60%, transparent); }
+.node.rcv { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.wire { flex: none; width: 84px; display: flex; flex-direction: column; align-items: center; font: 600 10.5px var(--mono); color: var(--text-3); }
+.wire::before { content: ''; width: 100%; height: 2px; background: linear-gradient(90deg, var(--pvw), var(--accent)); border-radius: 2px; margin-bottom: 3px; }
+.kv { display: grid; grid-template-columns: repeat(3, 100px minmax(0, 1fr)); gap: 5px 10px; font-size: 12px; align-content: start; }
+.kv span { color: var(--text-3); } .kv b { font-weight: 600; font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.det-actions { display: flex; gap: 8px; margin-top: 10px; }
+.res-row { display: grid; grid-template-columns: 170px minmax(0, 1fr) 150px 90px 90px 150px 150px; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.res-row.h { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; background: var(--panel-2); }
+.res-row:last-child { border-bottom: none; }
+.res { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.gm { display: flex; align-items: center; gap: 8px; }
+.gm .badge-gm { font: 600 10.5px var(--mono); padding: 1px 6px; border-radius: 10px; background: rgba(34, 197, 94, 0.15); color: var(--pvw); }
+.gm .badge-gm.bk { background: var(--panel-3); color: var(--text-2); }
+</style>
+<style>
+.pane { display: none; flex-direction: column; gap: 14px; } .pane.on { display: flex; }
+.set-card > .body { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.set-card > header .spacer { flex: 1; }
+.fld { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.fld input { height: 32px; }
+.rcpts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 32px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-3); }
+.rcpt { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 9px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line-2); font-size: 12px; }
+.rcpt button { border: none; background: none; color: var(--text-3); cursor: pointer; padding: 0 2px; }
+.rcpts input { border: none; background: none; height: 24px; flex: 1; min-width: 160px; }
+.testline { display: flex; align-items: center; gap: 10px; }
+.ok-pill { font-size: 12px; color: var(--pvw); display: inline-flex; align-items: center; gap: 6px; }
+.wh-kind { font: 600 11px var(--mono); padding: 1px 7px; border-radius: 10px; background: var(--panel-3); color: var(--text-2); }
+.wh-kind.teams { background: rgba(98, 100, 167, 0.2); color: #a5a7f0; } .wh-kind.slack { background: rgba(224, 30, 90, 0.15); color: #ff7aa2; }
+.kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.kgroup { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; }
+.kgroup h4 { margin: 0 0 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); display: flex; align-items: center; gap: 6px; }
+.kgroup label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.set-card > .body.send-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+.mailprev { border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); overflow: hidden; font-size: 12.5px; }
+.mailprev .ph { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.mailprev .ph b { font-size: 13px; } .mailprev .ph span { color: var(--text-3); font-size: 11.5px; }
+.mailprev .pl { padding: 8px 12px; display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 4px 10px; border-bottom: 1px solid var(--line); }
+.mailprev .pl:last-child { border-bottom: none; }
+.mailprev .pl time { font: 11px var(--mono); color: var(--text-3); }
+.inline-num { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); }
+.inline-num input { width: 70px; height: 30px; text-align: right; font-family: var(--mono); }
+/* Explorateur SNMP */
+.xbar { display: grid; grid-template-columns: 300px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; }
+.xbar input.oid { height: 34px; font-family: var(--mono); }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.xmeta { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--text-2); }
+.xmeta b { color: var(--text); font-variant-numeric: tabular-nums; }
+.oidc .base { color: var(--text-3); }
+.ty { font: 600 10.5px var(--mono); padding: 1px 6px; border-radius: 9px; background: var(--panel-3); color: var(--text-2); }
+.ty.str { background: var(--accent-soft); color: var(--accent-2); } .ty.int { background: rgba(45, 212, 191, 0.14); color: #2dd4bf; } .ty.cnt { background: rgba(245, 165, 36, 0.14); color: var(--warn); } .ty.oid { background: rgba(232, 121, 249, 0.14); color: #e879f9; }
+:root[data-theme='light'] .ty.int { color: #0f766e; } :root[data-theme='light'] .ty.oid { color: #a21caf; }
+.hex { font: 11px var(--mono); color: var(--text-3); }
+.ro-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--pvw); padding: 2px 8px; border-radius: 10px; background: rgba(34, 197, 94, 0.12); }
+</style>
+</head>
+<body>
+<div id="root"><div class="app">
+<nav class="topbar">
+  <div class="brand"><span class="brand-lockup">
+    <svg class="brand-f-lead" viewBox="93.8 -0.2 52.3 52.95" width="23.7" height="24" aria-hidden="true"><path fill="currentColor" d="__F__"/></svg>
+    <span class="brand-name">Strata</span><span class="brand-module">Network</span>
+  </span></div>
+  <div class="tabs home-tabs">
+    <button><i data-i="radar" data-s="14"></i> <span class="tab-label">Scan</span></button>
+    <button><i data-i="ethernet-port" data-s="14"></i> <span class="tab-label">Switchs</span></button>
+    <button><i data-i="radio" data-s="14"></i> <span class="tab-label">Multicast</span></button>
+    <button><i data-i="list-tree" data-s="14"></i> <span class="tab-label">Topologie</span></button>
+    <button><i data-i="bell" data-s="14"></i> <span class="tab-label">Alertes</span><span class="nav-dot warn"></span></button>
+    <button class="on"><i data-i="server" data-s="14"></i> <span class="tab-label">Système</span></button>
+  </div>
+  <div class="spacer"></div>
+  <span class="ux1-pill"><span class="ux1-dot"></span>Connecté</span>
+</nav>
+<div class="content">
+<div class="page-2">
+  <aside class="lib-nav" id="nav">
+    <div class="lib-nav-section"><span>Supervision</span></div>
+    <div class="lib-nav-item"><i data-i="gauge" data-s="15"></i><span class="grow">Performance</span></div>
+    <div class="lib-nav-item"><i data-i="heart-pulse" data-s="15"></i><span class="grow">Santé</span></div>
+    <div class="lib-nav-item"><i data-i="history" data-s="15"></i><span class="grow">Historique</span></div>
+    <div class="lib-nav-item on" data-p="notif"><i data-i="send" data-s="15"></i><span class="grow">Notifications</span></div>
+    <div class="lib-nav-section"><span>Accès</span></div>
+    <div class="lib-nav-item"><i data-i="users" data-s="15"></i><span class="grow">Utilisateurs</span></div>
+    <div class="lib-nav-item"><i data-i="lock" data-s="15"></i><span class="grow">Sécurité</span></div>
+    <div class="lib-nav-section"><span>Réseau</span></div>
+    <div class="lib-nav-item"><i data-i="layers" data-s="15"></i><span class="grow">VLAN</span></div>
+    <div class="lib-nav-item" data-p="snmp"><i data-i="network" data-s="15"></i><span class="grow">SNMP</span></div>
+    <div class="lib-nav-section"><span>Serveur</span></div>
+    <div class="lib-nav-item"><i data-i="sliders-horizontal" data-s="15"></i><span class="grow">Général</span></div>
+    <div class="lib-nav-item"><i data-i="cloud-download" data-s="15"></i><span class="grow">Mises à jour</span></div>
+    <div class="lib-nav-item"><i data-i="rotate-ccw" data-s="15"></i><span class="grow">Maintenance</span></div>
+  </aside>
+  <main class="library"><div class="library-inner full">
+
+  <!-- ── Notifications ── -->
+  <div class="pane on" data-p="notif">
+    <div class="settings-head"><div><h1>Notifications</h1></div><div class="spacer"></div><button class="btn primary"><i data-i="check" data-s="14"></i> Enregistrer</button></div>
+
+    <section class="set-card"><header><i data-i="mail" data-s="16"></i><h2>Email</h2><div class="spacer"></div><label class="check"><input type="checkbox" checked /> Activé</label></header>
+      <div class="body">
+        <div class="set-grid" style="grid-template-columns:minmax(0,2fr) 100px minmax(0,1.4fr)">
+          <div class="fld"><span class="set-label">Serveur SMTP</span><input class="mono" value="smtp.exploitation.local" /></div>
+          <div class="fld"><span class="set-label">Port</span><input class="mono" value="587" /></div>
+          <div class="fld"><span class="set-label">Sécurité</span><div class="segmented"><button>Aucune</button><button class="on">STARTTLS</button><button>TLS</button></div></div>
+        </div>
+        <div class="set-grid">
+          <div class="fld"><span class="set-label">Utilisateur</span><input value="strata" /></div>
+          <div class="fld"><span class="set-label">Mot de passe</span><input type="password" value="••••••••" /></div>
+          <div class="fld"><span class="set-label">Expéditeur</span><input value="strata-network@exploitation.local" /></div>
+        </div>
+        <div class="fld"><span class="set-label">Destinataires</span><div class="rcpts"><span class="rcpt">exploitation@exploitation.local<button>×</button></span><span class="rcpt">astreinte-reseau@exploitation.local<button>×</button></span><input placeholder="Ajouter une adresse" /></div></div>
+        <div class="testline"><button class="btn small"><i data-i="send" data-s="13"></i> Envoyer un test</button><span class="ok-pill"><i data-i="check" data-s="13"></i> Envoyé à 14:02</span></div>
+      </div>
+    </section>
+
+    <section class="set-card"><header><i data-i="webhook" data-s="16"></i><h2>Webhooks</h2><div class="spacer"></div><button class="btn small"><i data-i="plus" data-s="13"></i> Ajouter</button></header>
+      <table class="user-table" style="border:none;border-radius:0">
+        <thead><tr><th>Nom</th><th>Type</th><th>Adresse</th><th>Activé</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>Canal Teams « Réseau »</td><td><span class="wh-kind teams">Teams</span></td><td class="ip muted">https://exploitation.webhook.office.com/…</td><td><label class="check"><input type="checkbox" checked /></label></td><td style="text-align:right"><button class="icon-btn ghost" title="Envoyer un test"><i data-i="send" data-s="14"></i></button><button class="icon-btn ghost" title="Modifier"><i data-i="pencil" data-s="14"></i></button><button class="icon-btn ghost" title="Supprimer"><i data-i="trash-2" data-s="14"></i></button></td></tr>
+          <tr><td>Supervision (Zabbix)</td><td><span class="wh-kind">Générique</span></td><td class="ip muted">https://zabbix.exploitation.local/…</td><td><label class="check"><input type="checkbox" /></label></td><td style="text-align:right"><button class="icon-btn ghost" title="Envoyer un test"><i data-i="send" data-s="14"></i></button><button class="icon-btn ghost" title="Modifier"><i data-i="pencil" data-s="14"></i></button><button class="icon-btn ghost" title="Supprimer"><i data-i="trash-2" data-s="14"></i></button></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="set-card"><header><i data-i="filter" data-s="16"></i><h2>Envoi</h2><div class="spacer"></div><div class="segmented"><button>Toutes les alertes</button><button class="on">Alertes choisies</button></div></header>
+      <div class="body send-grid">
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="kinds">
+            <div class="kgroup"><h4><i data-i="radar" data-s="12"></i> Machines</h4>
+              <label class="check"><input type="checkbox" /> Nouvelle machine</label><label class="check"><input type="checkbox" /> Machine disparue</label><label class="check"><input type="checkbox" checked /> Conflit d’IP</label><label class="check"><input type="checkbox" checked /> Écart de VLAN</label><label class="check"><input type="checkbox" checked /> Surveillée, injoignable</label><label class="check"><input type="checkbox" checked /> Surveillée, revenue</label></div>
+            <div class="kgroup"><h4><i data-i="ethernet-port" data-s="12"></i> Switchs</h4>
+              <label class="check"><input type="checkbox" checked /> Lien coupé</label><label class="check"><input type="checkbox" checked /> Port instable</label><label class="check"><input type="checkbox" /> Erreurs sur un port</label><label class="check"><input type="checkbox" checked /> Port saturé</label><label class="check"><input type="checkbox" checked /> Optique faible</label><label class="check"><input type="checkbox" checked /> Alimentation, ventilateur, température</label><label class="check"><input type="checkbox" /> Écart de configuration</label><label class="check"><input type="checkbox" /> Voisin</label><label class="check"><input type="checkbox" checked /> Budget PoE</label></div>
+            <div class="kgroup"><h4><i data-i="radio" data-s="12"></i> Multicast</h4>
+              <label class="check"><input type="checkbox" checked /> Flux disparu</label><label class="check"><input type="checkbox" checked /> Plus de récepteur</label><label class="check"><input type="checkbox" checked /> Groupe émis par 2 sources</label><label class="check"><input type="checkbox" checked /> Flux envoyés partout</label><label class="check"><input type="checkbox" checked /> Paire 2022-7 incomplète</label><label class="check"><input type="checkbox" checked /> Changement de grandmaster</label><label class="check"><input type="checkbox" /> Domaine PTP différent</label></div>
+          </div>
+          <span class="inline-num">Regrouper les alertes pendant <input value="60" /> s</span>
+        </div>
+        <div class="mailprev">
+          <div class="ph"><b>[Strata Network] 3 alertes</b><span>à exploitation@…, astreinte-reseau@… · 14:06</span></div>
+          <div class="pl"><time>14:05:12</time><span><span class="kind bad">Alimentation</span> SW-Plateau-N9K-02 · PSU 2 en défaut</span></div>
+          <div class="pl"><time>14:05:20</time><span><span class="kind ptp">Optique faible</span> SW-Plateau-N9K-02 · Eth1/7 · −11,8 dBm</span></div>
+          <div class="pl"><time>14:05:41</time><span><span class="kind">Flux disparu</span> CAM-04 Vidéo · 239.10.1.4</span></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ── SNMP : agents + explorateur ── -->
+  <div class="pane" data-p="snmp">
+    <div class="settings-head"><div><h1>SNMP</h1></div><div class="spacer"></div><span class="ro-badge"><i data-i="lock" data-s="12"></i> Lecture seule</span></div>
+    <div class="sys-tabrow"><div class="tabs sys-tabs"><button><i data-i="network" data-s="14"></i><span>Agents</span><span class="sys-tab-n">4</span></button><button class="on"><i data-i="search-code" data-s="14"></i><span>Explorateur</span></button></div></div>
+    <div class="xbar">
+      <button class="dd-btn"><i data-i="ethernet-port" data-s="13"></i><span class="dd-label">SW-Plateau-N9K-02 · 10.99.0.21 · v3</span><i data-i="chevron-down" data-s="12"></i></button>
+      <input class="oid" value="1.3.6.1.2.1.31.1.1.1.18" />
+      <button class="btn primary"><i data-i="list-tree" data-s="14"></i> Lire la branche</button>
+      <button class="btn"><i data-i="file-text" data-s="14"></i> Lire une valeur</button>
+    </div>
+    <div class="presets"><button class="asr-chip">Système</button><button class="asr-chip">Interfaces</button><button class="asr-chip on">Descriptions de port</button><button class="asr-chip">Compteurs 64 bits</button><button class="asr-chip">VLAN (Q-BRIDGE)</button><button class="asr-chip">VLAN Cisco</button><button class="asr-chip">Table MAC</button><button class="asr-chip">ARP</button><button class="asr-chip">LLDP</button><button class="asr-chip">CDP</button><button class="asr-chip">Entités</button><button class="asr-chip">Capteurs</button><button class="asr-chip">CPU · mémoire</button><button class="asr-chip">Agrégats</button><button class="asr-chip">STP</button><button class="asr-chip">IGMP snooping</button><button class="asr-chip">PoE</button></div>
+    <div class="media-toolbar"><label class="search" style="width:260px"><i data-i="search" data-s="14"></i><input placeholder="Filtrer les résultats" /></label><div class="xmeta"><span><b>62</b> lignes</span><span><b>184</b> ms</span><span>ifAlias · IF-MIB</span></div><div class="spacer"></div><button class="btn small"><i data-i="copy" data-s="13"></i> Copier</button><button class="btn small"><i data-i="download" data-s="13"></i> CSV</button></div>
+    <table class="pt">
+      <colgroup><col style="width:270px"><col style="width:150px"><col style="width:110px"><col><col style="width:28%"></colgroup>
+      <thead><tr><th>OID</th><th>Nom</th><th>Type</th><th>Valeur</th><th>Hexadécimal</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  </div></main>
+</div>
+</div></div></div>
+
+<div class="mk-switch">Maquette
+  <div class="lang-switch theme-switch"><button class="on" data-theme-set="dark">Sombre</button><button data-theme-set="light">Clair</button></div>
+</div>
+<script>
+const R = [[436207616, 'show interface Ethernet1/5 status detail', '73 68 6f 77 20 69 6e 74 65 72 66 61 63 65 20 45 …'], [436211712, 'CAM-01 Bleu', '43 41 4d 2d 30 31 20 42 6c 65 75'], [436215808, 'CAM-02 Rouge', '43 41 4d 2d 30 32 20 52 6f 75 67 65'], [436219904, '', ''], [436224000, '', ''],
+  [436228096, 'mixer-a 25G', '6d 69 78 65 72 2d 61 20 32 35 47'], [436232192, 'Encodeur SRT', '45 6e 63 6f 64 65 75 72 20 53 52 54'], [436404224, 'Uplink core A', '55 70 6c 69 6e 6b 20 63 6f 72 65 20 41'], [436408320, 'Uplink core B', '55 70 6c 69 6e 6b 20 63 6f 72 65 20 42'], [369098753, 'Uplinks core', '55 70 6c 69 6e 6b 73 20 63 6f 72 65']];
+const tyc = { OctetString: 'str' };
+document.getElementById('rows').innerHTML = R.map(([idx, v, hex], i) => `<tr><td class="ip oidc"><span class="base">1.3.6.1.2.1.31.1.1.1.18.</span>${idx}</td><td class="ip">ifAlias.${idx}</td><td><span class="ty str">OctetString</span></td><td>${v || '<span class="muted2">""</span>'}</td><td class="hex">${hex}</td></tr>`).join('')
+  + `<tr><td class="ip oidc"><span class="base">1.3.6.1.2.1.1.</span>3.0</td><td class="ip">sysUpTime.0</td><td><span class="ty int">TimeTicks</span></td><td>1 021 334 512 · 118 j 4 h</td><td class="hex"></td></tr>
+     <tr><td class="ip oidc"><span class="base">1.3.6.1.2.1.31.1.1.1.</span>6.436207616</td><td class="ip">ifHCInOctets.436207616</td><td><span class="ty cnt">Counter64</span></td><td>918 273 645 120 334</td><td class="hex"></td></tr>
+     <tr><td class="ip oidc"><span class="base">1.3.6.1.2.1.1.</span>2.0</td><td class="ip">sysObjectID.0</td><td><span class="ty oid">OID</span></td><td class="ip">1.3.6.1.4.1.9.12.3.1.3.1812</td><td class="hex"></td></tr>`;
+document.querySelectorAll('#nav [data-p]').forEach((n) => n.addEventListener('click', () => {
+  document.querySelectorAll('#nav .lib-nav-item').forEach((x) => x.classList.toggle('on', x === n));
+  document.querySelectorAll('.pane').forEach((x) => x.classList.toggle('on', x.dataset.p === n.dataset.p));
+}));
+document.querySelectorAll('[data-theme-set]').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.themeSet === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
+  document.querySelectorAll('[data-theme-set]').forEach((x) => x.classList.toggle('on', x === b));
+}));
+</script>
+</body>
+</html>
