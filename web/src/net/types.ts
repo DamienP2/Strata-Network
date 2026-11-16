@@ -348,7 +348,14 @@ export type AlertKind =
   | 'tempHigh'
   | 'poeBudget'
   | 'neighbourNew'
-  | 'neighbourGone';
+  | 'neighbourGone'
+  | 'streamGone'
+  | 'noReceivers'
+  | 'groupConflict'
+  | 'flooding'
+  | 'pairMissing'
+  | 'ptpGmChange'
+  | 'ptpDomain';
 
 export interface Alert {
   id: string;

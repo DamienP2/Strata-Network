@@ -185,6 +185,124 @@ interface Stream {             // multicast; key = group:port:source
   bps: number; pps: number; packets: number; history: number[];   // bps, oldest first, ≤ 60
   firstSeen: number; lastSeen: number;
   announced: boolean; routed: boolean;
+  format?: Format;             // from the SDP
+  estBps?: number;             // what the SDP implies, headers included (see Bitrate)
+  lastAnnounced?: number;      // last SAP announcement (unix ms)
+  sapIntervalMs?: number;      // time between the last two announcements
+  dup?: { group: string; port: number; source?: string };   // the other leg named by the SDP's a=group:DUP
+  flooded: number;             // last time its packets reached the interface without a join (unix ms; 0 = never)
+  floodVlan?: number;          // 802.1Q tag of those frames
+}
+
+interface Format {             // every field optional
+  standard?: 'ST 2110-20' | 'ST 2110-22' | 'ST 2110-30' | 'ST 2110-31' | 'ST 2110-40' | 'ST 2022-6' | 'MPEG-TS';
+  width?: number; height?: number; frameRate?: number; frameRateText?: string /* "60000/1001" */; interlaced?: true;
+  sampling?: string /* "YCbCr-4:2:2" */; depth?: number /* bits a sample, audio too */; colorimetry?: string; tcs?: string;
+  clockRate?: number; audioRate?: number; channels?: number; ptimeMs?: number;
+  tsRefclk?: string /* a=ts-refclk as written */; ptpGm?: string /* "EC:46:70:FF:FE:00:1A:2B" */; ptpDomain?: number;
+  mediaClock?: string /* a=mediaclk: "direct=0" */; bandwidthBps?: number /* b=AS ×1000 or b=TIAS */;
+}
+
+// ── Multicast flows (GET /api/multicast/flows) ──
+interface Attach { switchId: string; switchName: string; n?: number; port: string /* interface name */;
+                   edge: boolean /* not a switch link, an aggregate member or a trunk */; via: 'inventory' | 'macTable' }
+interface Receiver {           // a port of an IGMP snooping entry (or a multicast router port of its VLAN)
+  switchId: string; switchName: string; n?: number; port: string; vlan: number;
+  label?: string;              // the port's inventory label
+  host?: string; hostIp?: string;   // the machine on the port (inventory name, else IP; else the LLDP neighbour); never on a switch link
+  router: boolean;             // multicast router port
+  peer?: string;               // the port (or aggregate) leads to this other switch (name)
+  agg?: string;                // aggregate of the faceplate port ("port-channel1")
+}
+interface PathNode {           // one switch of the path, parents before children
+  switchId: string; switchName: string;
+  parent?: string;             // the switch before (none: the emitter's switch)
+  egress?: string;             // the parent's port(s) towards it: aggregate name, else "Eth1/3 · Eth1/4"
+  ingress?: string;            // its port(s) towards the parent; on the emitter's switch: the emitter's port
+  igmpPorts: number; receivers: number;   // snooping ports of the group on it, and the edge ones among them
+}
+interface Flow {
+  key: string;                 // "group:port:source" ("group:0:" for a group known from snooping only)
+  group: string; port: number; source?: string;
+  kind: Stream['kind']; encoding?: string;
+  name?: string;               // stream label, else group label, else SAP name
+  label: string;               // stream label ('' = none)
+  groupLabel: string;          // group label (PUT /labels/{group}; '' = none)
+  sapName?: string;
+  announced: boolean; routed: boolean;
+  flooded: boolean;            // a flood sample saw it in the last 11 min
+  floodVlan?: number;
+  snoopOnly: boolean;          // only in switches' snooping tables (no packet, no announcement)
+  guessed: boolean;            // snoopOnly and the switch gave only the MAC: one of its 32 groups, guessed (see below)
+  ambiguous: boolean;          // its snooping MAC matched several known groups of the same VLAN (all got the receivers)
+  live: boolean;               // see Liveness
+  state: 'ok' | 'warn' | 'unk' | 'off';   // off: not live; warn: conflict, pair missing or flooded; unk: not announced
+  issues: ('unannounced' | 'noReceivers' | 'pairMissing' | 'conflict' | 'flooded' | 'gone')[];
+  bps: number; pps: number;    // measured: router table, flood sample or check (passive)
+  estBps?: number;             // from the SDP
+  history: number[]; firstSeen: number; lastSeen: number /* last packet or announcement */;
+  lastAnnounced?: number; sapIntervalMs?: number;
+  format?: Format;
+  vlan?: number;               // flood tag, else the VLAN (subnet) or network VLAN holding the source, else the plan range's VLAN
+  emitter?: { ip: string; name?: string; mac?: string; at?: Attach };
+  sources?: string[];          // conflict: every source of the group
+  conflict: boolean;
+  receivers: Receiver[];       // over every online switch whose slow read is done
+  receiverCount: number;       // receivers that are neither router ports nor switch links
+  path: PathNode[];            // from the emitter's switch to every switch that has the group in its snooping table
+  unreachable: string[];       // those switches no chain of `peer` links reaches
+  pair?: { key: string; group: string; port: number; source?: string; name?: string; at?: Attach };   // ST 2022-7 other leg
+  pairState?: 'ok' | 'missing';  // missing: a leg is not live, or a Red/Blue-named stream has no other leg
+  pairBy?: 'sdp' | 'name';
+  leg?: 'a' | 'b';             // a: Red / Rouge / A / 1 / primary; b: Blue / Bleu / B / 2 / secondary
+}
+interface PtpClock {           // a clock that sends Announce (224.0.1.129:320)
+  ip: string; domain: number;
+  clock: string;               // the sender's clock identity
+  gm: string;                  // the grandmaster it announces
+  priority1: number; clockClass: number; clockAccuracy: number; accuracyNs?: number; variance: number; priority2: number;
+  stepsRemoved: number; timeSource: 'atomic' | 'gps' | 'radio' | 'ptp' | 'ntp' | 'handSet' | 'other' | 'internalOscillator' | 'unknown';
+  utcOffset: number; firstSeen: number; lastSeen: number; count: number; rate: number /* announces a second */;
+  name?: string;               // inventory name of its IP
+  role: 'gm' | 'backup' | 'boundary';   // gm: best of its domain (BMCA) among those heard in the last 10 s
+  live: boolean;               // heard in the last 10 s
+  wrongDomain: boolean;        // not the main domain (that of the best clock of all)
+  at?: Attach;
+}
+interface PtpDevice {          // a device that sends Delay_Req (224.0.1.129:319)
+  clock: string; ip: string; domain: number; firstSeen: number; lastSeen: number; count: number;
+  name?: string; mac?: string /* inventory, ARP, else from an EUI-64 clock identity */; live: boolean /* 30 s */;
+  wrongDomain: boolean; at?: Attach;
+}
+interface GmChange { at: number; domain: number; from?: string; to?: string; fromIp?: string; toIp?: string }   // identities; absent = none
+interface McastRange { id: string; cidr: string /* "239.10.1.0/24", /16 to /32, inside 224.0.0.0/4 */; usage: string; vlan?: number }
+interface Reservation { group: string; name: string }
+interface GroupUse { group: string; state: 'used' | 'reserved' | 'conflict'; name?: string }
+interface McastRules {         // all true by default
+  streamGone: boolean; noReceivers: boolean; conflict: boolean; flooding: boolean;
+  pairMissing: boolean; gmChange: boolean; ptpDomain: boolean;
+}
+interface Flows {
+  at: number;
+  flows: Flow[];               // by group, port, source
+  summary: { flows: number; live: number; byKind: Record<string, number>; estBps: number /* live flows */; bps: number;
+             receivers: number /* distinct edge ports */; pairs: number; pairsIncomplete: number; unannounced: number;
+             noReceivers: number; conflicts: number /* groups */; flooded: number; switchesOnline: number; switchesRead: number };
+  switches: { id: string; name: string; ip?: string; online: boolean; read: boolean; at: number /* last slow read */ }[];
+  links: { a: string; b: string; aPort: string; bPort: string }[];   // the peer links between them (names as in egress)
+  plan: {
+    ranges: (McastRange & { first: string; last: string; size: number; used: number /* incl. conflicts */; reserved: number;
+              conflicts: number; free: number; nextFree?: string /* lowest free, x.x.x.0 and .255 skipped */;
+              groups: GroupUse[] /* the groups not free, in order */ })[];
+    outside: { used: number; reserved: number; conflicts: number; groups: GroupUse[] };   // « hors plan »
+    reservations: Reservation[];
+  };
+  ptp: { gm?: PtpClock; domain?: number /* main domain */; clocks: PtpClock[] /* BMCA order */; devices: PtpDevice[];
+         changes: GmChange[] /* newest first, ≤ 50 */ };
+  flood: { iface: string; enabled: boolean /* floodWatch */; available: boolean; error?: string; at: number /* last sample */;
+           groups: string[] /* flooded then */; vlan?: number };
+  rules: McastRules;
+  check: { enabled: boolean /* checkEnabled */; maxMbps: number };
 }
 
 interface Service { kind: string /* NDI, Dante, AES67 / RAVENNA, NMOS, Web… */; name: string; host: string; ip?: string; port: number; txt: string[] }
@@ -194,7 +312,9 @@ interface Alert {
   kind: 'newHost' | 'hostGone' | 'ipConflict' | 'vlanMismatch' | 'watchDown' | 'watchUp'
       // switch alerts (online switches, rules of the switch):
       | 'portDown' | 'portFlap' | 'portErrors' | 'portSaturated' | 'configDrift' | 'opticLow'
-      | 'psuFault' | 'fanFault' | 'tempHigh' | 'poeBudget' | 'neighbourNew' | 'neighbourGone';
+      | 'psuFault' | 'fanFault' | 'tempHigh' | 'poeBudget' | 'neighbourNew' | 'neighbourGone'
+      // multicast alerts (McastRules):
+      | 'streamGone' | 'noReceivers' | 'groupConflict' | 'flooding' | 'pairMissing' | 'ptpGmChange' | 'ptpDomain';
   ip: string; networkId?: string;   // switch alerts: the switch's IP, else its agent's IP, else 0.0.0.0
   detail: string;              // facts only, English, e.g. "00:11:32:AB:CD:EF and 3C:52:82:5A:00:E1"
   seen: boolean;
@@ -206,8 +326,41 @@ interface Alert {
 // opticLow: the interface name when not a faceplate port; psuFault / fanFault: "<name> · <switch's state>";
 // tempHigh: the sensor name; poeBudget: "<used> / <budget> W"; neighbourNew / Gone: "<remote name> <remote port>"
 // (prefixed by "<interface> · " when not a faceplate port). Others: empty.
+// Multicast alert details (ip: the source, else the group; flooding: the interface's address; PTP: the device):
+// streamGone / noReceivers: "<group>:<port> <name>"; groupConflict: "<group> from <ip> and <ip>";
+// flooding: "<iface> · VLAN <n> · <count> groups: <g>, <g>, <g>, <g> +<more>" ("no VLAN" when unknown);
+// pairMissing: "<group>:<port> <name> · <other group>:<port> missing" or "… · other leg missing";
+// ptpGmChange: "domain <d>: <identity> (<ip>) → <identity> (<ip>)" ("none" when there is none);
+// ptpDomain: "<name or ip> domain <d>, grandmaster domain <main>".
 
 interface HistoryEntry { at: number; user: string /* display name, or "scheduler" */; action: string; target: string; detail: string }
+
+interface NotificationSettings {   // admin only; secrets sent masked "••••••••" and kept when sent back masked
+  email: { enabled: boolean; host: string; port: number /* 587; 0 = 25 / 587 / 465 by security */;
+           security: 'none' | 'starttls' | 'tls'; user: string /* '' = no authentication */;
+           password: string /* masked */; from: string /* "Strata <strata@example.com>" */; to: string[] };
+  webhooks: { id: string /* '' or absent when new */; name: string; kind: 'teams' | 'slack' | 'generic';
+              url: string /* masked except scheme and host: "https://x.webhook.office.com/••••••••" */; enabled: boolean }[];
+  filter: { kinds: 'all' | AlertKind[]; groupSecs: number /* 0..3600, default 60 */ };
+  appUrl: string;              // the web app's address as the recipients reach it ('' = no link in the messages)
+}
+// Messages (French, server-written): subject "[<server name>] <kind label> · <place>" (one alert) or
+// "[<server name>] <n> alertes"; one line per alert "16/11/2026 14:03:12 — Lien coupé — SW-CORE-1 · port 12 (Gi1/0/12) — <detail>"
+// (time in the server's time zone; place: switch and port, else the IP and the address's label or name), at most 50 lines
+// then "… et n autres", then "Ouvrir Strata Network : <appUrl>/alerts".
+// teams: {"text": <lines joined by blank lines>}; slack: {"text": <lines>};
+// generic: {"alerts": [{kind, at, switchId, switchName, port, ip, detail, value, limit}]} (absent fields null).
+// Test message: same shapes; generic sends {"test": true, "text", "alerts": []}.
+
+interface SnmpRow {            // raw SNMP explorer
+  oid: string;                 // dotted
+  type: 'Integer' | 'OctetString' | 'Null' | 'OID' | 'IpAddress' | 'Counter32' | 'Gauge32' | 'TimeTicks' | 'Counter64'
+      | 'NoSuchObject' | 'NoSuchInstance' | 'EndOfMibView' | 'Unknown';   // Opaque is read as OctetString
+  text: string;                // OctetString: the text when printable UTF-8 (trailing NULs dropped), else a MAC
+                               // "00:11:32:AB:CD:EF" for 6 bytes, else the hex; OID / IpAddress dotted; numbers in
+                               // decimal (TimeTicks as raw hundredths); '' for Null / NoSuch… / EndOfMibView
+  hex?: string;                // OctetString only, always: "43 69 73 63 6F"
+}
 ```
 
 ## Routes
@@ -245,13 +398,26 @@ interface HistoryEntry { at: number; user: string /* display name, or "scheduler
 | `POST /api/snmp/test` | `{ip, port, community, v3?, id?}` → `{name, description}` | 502 + message on failure; masked secrets are taken from agent `id` |
 | `GET /api/multicast` | → `{iface: string, ifaces: {name, ip}[], streams: Stream[], checkMaxMbps: number}` | `changed: multicast` (sent at most every 2 s) |
 | `PUT /api/multicast/settings` | `{iface, checkMaxMbps}` → 204 | admin |
-| `POST /api/multicast/check` | `{group, port}` → `{received, cutShort, bps, pps}` | one at a time (409) |
+| `POST /api/multicast/check` | `{group, port}` → `{received, cutShort, bps, pps}` | one at a time (409 "a check is already running"); refused before any join: 403 "the stream check is turned off" (`checkEnabled` false, the default), 404 "no such stream" (not seen or announced), 409 "the stream is heavier than the limit" (its `estBps` or its measured rate above `checkMaxMbps`), 409 "the rate of this video stream is not known" (video, -20/-22/2022-6, without an estimate) |
 | `PATCH /api/multicast/label` | `{group, port, source?, label}` → 204 | |
+| `GET /api/multicast/flows` | → `Flows` | `changed: multicast`; computed on each call |
+| `PUT /api/multicast/labels/{group}` | `{label}` → 204 | names a group (unannounced ones); '' removes it; 400 "not a multicast group"; history "named group" |
+| `GET /api/multicast/ranges` · `POST` · `PUT /{id}` · `DELETE /{id}` | `McastRange` | 400 "a range is inside 224.0.0.0/4", "a range holds at most 65536 groups (/16)", "a vlan is a number from 1 to 4094"; 409 "this range overlaps another one"; 404 "no such range"; history "created / changed / deleted multicast range" |
+| `GET /api/multicast/reservations` · `POST` | `Reservation` | 409 "this group is already reserved"; history "reserved group" |
+| `PUT /api/multicast/reservations/{group}` · `DELETE` | `{name}` → `Reservation` · 204 | 404 "no such reservation"; history "changed reservation" / "released group" |
+| `GET /api/multicast/rules` · `PUT` | `McastRules` | history "changed multicast alert rules" |
+| `GET /api/multicast/sdp/{group}/{port}` | → `application/sdp` text | the last SAP announcement; 404 "no such sdp" |
+| `PUT /api/multicast/options` | `{checkEnabled?, floodWatch?}` → 204 | admin; stored in multicast.json (`checkEnabled` default false, `floodWatch` default true); history "changed multicast settings" |
 | `GET /api/services` | → `{at: number, services: Service[]}` | mDNS; `changed: services` |
 | `POST /api/services/browse` | → 202 | one question per service type, answers for 3 s |
 | `GET /api/alerts` | → `Alert[]` (newest first, ≤ 500) | `changed: alerts` |
 | `POST /api/alerts/seen` | `{ids: string[] \| null}` (null = all) → 204 | |
 | `GET /api/history?limit=` | → `HistoryEntry[]` (newest first) | admin |
+| `GET /api/notifications` | → `NotificationSettings` | admin; `changed: notifications` |
+| `PUT /api/notifications` | `NotificationSettings` → `NotificationSettings` | admin; 400 "the smtp server cannot be empty", "the email has no recipient", "the sender address cannot be empty", "not an email address: <a>", "the webhook url starts with https://", "two webhooks have the same id", "the app address starts with https://"; history "changed notifications" |
+| `POST /api/notifications/test` | `{channel: 'email' \| <webhook id>}` → `{sent: true, ms}` | admin; sends now (enabled or not) with the saved settings; 400 "the email is not set up", 404 "no such webhook", 502 + "smtp: authentication failed" / "smtp: the server refused the message (<code>)" / "smtp: the server answered <code>" / "smtp: tls failed" / "smtp: the server does not offer starttls" / "smtp: timed out" / "smtp: cannot connect to the server" / "webhook: the server answered <status>" / "webhook: timed out" / "webhook: unknown host" / "webhook: tls failed" / "webhook: cannot reach the server"; history "tested notification" (detail "sent" or the error) |
+| `POST /api/snmp/{id}/walk` | `{oid, max?}` → `{rows: SnmpRow[], truncated: boolean, error?: string, ms: number}` | admin; GETBULK steps under `oid` (`max` default 2000, at most 10 000); nothing under it → GET of `oid` itself; `truncated` when more rows were there or the walk stopped (`error`: "timed out" after 20 s, or the SNMP error after the first rows); 400 "the oid is written with numbers and dots (1.3.6.1.2.1.1)", 404 "no such snmp agent", 502 + SNMP message when nothing could be read |
+| `POST /api/snmp/{id}/get` | `{oids: string[]}` → `{rows: SnmpRow[], ms}` | admin; 1..64 OIDs (400 "no oid to read", "at most 64 oids at once"); a missing one comes back NoSuchObject / NoSuchInstance; 502 on failure |
 
 WebSocket, besides `changed`:
 - `{"type":"scan","networkId","running":bool,"done","total","up"}` while a scan runs (at most 4 per second) and once at the end.
@@ -272,7 +438,53 @@ WebSocket, besides `changed`:
 - **Monitoring**: every minute, each `watched` address is pinged (ICMP, else TCP on its known open ports); `watchDown`
   after 2 failures in a row, `watchUp` when it answers again; `up`/`rttMs` updated.
 - **Multicast**: passive only (SAP/SDP, PTP, routers' multicast tables by SNMP). `check` joins one group at most
-  2 s and stops above `checkMaxMbps` (default 100).
+  2 s and stops above `checkMaxMbps` (default 100); it is off unless `checkEnabled`, and refused before joining when
+  the stream is not known, its SDP estimate or measured rate is above the limit, or it is video with no estimate.
+  Groups joined: the SAP groups (239.255.255.255, 224.2.127.254) and PTP (224.0.1.129) all the time, a media group
+  only by a check. Nothing is ever sent: no IGMP query, no PTP, no SAP.
+- **Multicast flows** (`net/mflows.rs`, `strata_net::{mcast, mformat, ptp, flood}`):
+  - *Receivers*: the IGMP snooping entries (`SwitchInfo.mcast`) and multicast router ports of every online switch
+    already read. An entry that gives only the MAC (Q-BRIDGE) goes to the known groups (streams, named groups,
+    reservations) with that MAC, those whose VLAN is the entry's first (32 groups share a MAC); several left: all get
+    it, `ambiguous`. None known: the group of a plan range holding one of its 32 groups (the range of the entry's
+    VLAN first), else 239.<mac[3]>.<mac[4]>.<mac[5]>, `guessed`. MACs of control groups (224.0.0.x, PTP, SAP, SSDP)
+    are left out, as are those groups as flows.
+  - *Emitter port*: the source's address `switch` when set, else its MAC (inventory, else a router's ARP table) in the
+    switches' MAC tables (SNMP poller, `SwitchPort.learnt`): the port with no `peer`, not an aggregate member, not a
+    trunk, with the fewest MACs wins.
+  - *Path*: breadth first over `SwitchPort.peer` (either side recorded) from the emitter's switch to every switch
+    holding the group; the union of the shortest chains; parallel links named by their aggregate (slow read) when all
+    are members of one.
+  - *Liveness*: an announcement within max(30 s, 3 × the announcement interval), or packets of a check within 60 s,
+    or a flood sample or a router's table within 11 min. A group only in snooping tables is live while it is there.
+  - *Conflict*: two live sources for one group, unless both sources are in two different known VLANs (the two legs
+    of a pair sent on one group in two networks).
+  - *ST 2022-7*: the medias of one SDP's `a=group:DUP` are paired; else two streams whose names differ only by a leg
+    word (Rouge/Red ↔ Bleu/Blue anywhere in the name; A ↔ B, 1 ↔ 2, primary ↔ secondary as last word; case and
+    separators ignored), same kind, encoding, size, frame rate and channels, and a different group, VLAN or source;
+    a unique candidate (else the one with the same port). `missing`: one leg not live, or a Red/Blue name with no
+    other leg.
+  - *Bitrate* (`estBps`): ST 2110-20 width × height × samples a pixel (4:4:4/RGB 3, 4:2:2 2, 4:2:0 1.5) × depth ×
+    frame rate (exactframerate; interlaced: frames) × 1.05 (RTP/UDP/IP headers of ~1200-byte packets) — 1080p50 4:2:2
+    10 bits ≈ 2.18 Gb/s, 1080p59.94 ≈ 2.61 Gb/s (active video, not the SDI raster); -30/-31: rate × channels × sample
+    bytes (L16 2, L24 3, AM824 4) + 40 bytes a packet (1 / ptime, default 1 ms); -40: b=AS else 200 kb/s; 2022-6:
+    1.485 Gb/s, 2.970 above 1080i / 1080p30, × (1376 + 48) / 1376; others (MPEG-TS, -22): b=AS / b=TIAS.
+  - *Flooding* (`floodWatch`, on by default): every 5 min (first 10 s after start or after being turned on) the
+    interface is sampled for 1 s with a packet socket, a BPF filter keeping 164 bytes of IPv4 UDP multicast frames,
+    and all-multicast reception on the interface (local to the machine; Linux, needs root or CAP_NET_RAW; receive
+    only, nothing sent, no group joined, no IGMP): UDP to a multicast group that
+    looks like media (RTP v2 or MPEG-TS) for a group not joined on the machine (`/proc/net/igmp`, 224.0.0.x left out),
+    frames sent by the machine ignored, a sample during a check discarded. Those streams get `flooded` and the
+    sample's rate (`flooded` for 11 min). Unavailable: `flood.available` false with the error.
+  - *PTP*: Announce (BMCA order: priority1, clockClass, clockAccuracy, variance, priority2, grandmaster identity,
+    stepsRemoved, sender) and Delay_Req / Pdelay_Req on the groups already listened to; clocks and devices are
+    forgotten after an hour. The grandmaster of a domain changing (or none heard for 10 s) is recorded in `ptp.changes`
+    (multicast.json, 50 kept; the first one heard is not a change).
+  - *Alerts* (every 5 s, rules of `McastRules`): `streamGone` when an announced live stream stops being live (not
+    when a new interface restarts the engine); `noReceivers` when a live stream's edge receivers all left while the
+    switches they were on are still read; `groupConflict`; `flooding` (per interface and VLAN); `pairMissing` (a live
+    leg whose pair is missing); `ptpGmChange`; `ptpDomain` (a live clock or device not in the main domain). Conditions
+    must hold 15 s, then are raised once until they clear; transitions (`streamGone`, `ptpGmChange`) at once.
 - **Online switches** (read-only SNMP v2c): a task per online switch reads the interfaces' state and 64-bit counters
   every `onlineSecs` (also at server start for the switches saved online), the identity (system group, ENTITY-MIB
   chassis) and the VLAN setup (Q-BRIDGE-MIB) every 5 min. Interfaces are matched to the faceplate ports by name
@@ -306,7 +518,13 @@ WebSocket, besides `changed`:
   speed class (≥ 40 G qsfp, ≥ 10 G sfp, else rj45; a port without speed follows the one before) make a group.
 - **History**: every write route above adds an entry (`action`: "created network", "scanned", "changed port", "switch online", "switch offline",
   "changed read interval", "took config from switch", "saved switch model", "deleted switch model",
-  "changed alert rules", "linked switches", …).
-- Storage: `<data>/network/{networks,addresses,vlans,switches,snmp,multicast,alerts,history,templates}.json`
-  (`templates.json`: the user switch models) and `<data>/network/rates/<switchId>.json` (rate history), atomic writes;
+  "changed alert rules", "linked switches", "changed notifications", "tested notification", …).
+- **Notifications**: every alert raised (`Net::alert`, `Net::switch_alert`) is queued without waiting (1000 at most,
+  more are dropped and logged). Alerts of the kinds of `filter` are grouped: the first opens a window of `groupSecs`,
+  every alert raised before its end goes in the same message, one message per enabled channel (e-mail, each enabled
+  webhook). SMTP with lettre (rustls, the system's certificates), 15 s; webhooks POST JSON, 10 s; a failed send is
+  logged, not retried. Messages go to the mail server and the webhook URLs only.
+- **SNMP explorer**: read-only (GET and GETBULK, never SET), the agent's v2c or v3 session.
+- Storage (`multicast.json` also keeps `groupLabels`, `ranges`, `reservations`, `rules`, `ptpChanges`, `checkEnabled`, `floodWatch`): `<data>/network/{networks,addresses,vlans,switches,snmp,multicast,alerts,history,templates}.json`
+  (`templates.json`: the user switch models), `<data>/network/notifications.json` (`NotificationSettings`, unmasked; 0600 like `snmp.json`) and `<data>/network/rates/<switchId>.json` (rate history), atomic writes;
   history kept 1 year, alerts 500 newest.

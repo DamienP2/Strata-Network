@@ -57,6 +57,8 @@ pub fn router() -> Router<Shared> {
         .route("/api/alerts", get(alerts))
         .route("/api/alerts/seen", post(alerts_seen))
         .route("/api/history", get(history))
+        .merge(super::notify::router())
+        .merge(super::explore::router())
 }
 
 fn who(u: &User) -> String {
@@ -1031,6 +1033,7 @@ async fn multicast_check(State(s): State<Shared>, me: Session, Json(t): Json<Mca
     if t.port == 0 {
         return Err(bad("the port of this stream is not known"));
     }
+    net(&s).check_guard(t.group, t.port)?;
     let max = net(&s).store.lock().unwrap().multicast.check_max_mbps;
     let engine = net(&s).mcast.lock().unwrap().clone().ok_or_else(|| status(503, "no network interface"))?;
     let opts = strata_net::mcast::CheckOptions { max_ms: 2000, max_mbps: max };

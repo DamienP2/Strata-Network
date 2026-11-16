@@ -483,11 +483,14 @@ pub struct McastSettings {
     /// Labels by "group:port:source".
     #[serde(default)]
     pub labels: std::collections::BTreeMap<String, String>,
+    /// Group names, plan, alert rules, PTP changes (`mflows`).
+    #[serde(flatten)]
+    pub more: super::mflows::McastMore,
 }
 
 impl Default for McastSettings {
     fn default() -> Self {
-        McastSettings { iface: String::new(), check_max_mbps: check_max(), labels: Default::default() }
+        McastSettings { iface: String::new(), check_max_mbps: check_max(), labels: Default::default(), more: Default::default() }
     }
 }
 

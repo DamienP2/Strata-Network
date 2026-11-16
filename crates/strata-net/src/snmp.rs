@@ -48,10 +48,15 @@ pub enum Value {
     Null,
     Oid(Oid),
     Ip(Ipv4Addr),
+    /// Counter32.
     Counter(u64),
+    Counter64(u64),
     Gauge(u32),
     Ticks(u32),
+    /// An unknown type.
     Missing,
+    NoSuchObject,
+    NoSuchInstance,
     EndOfView,
 }
 
@@ -59,9 +64,31 @@ impl Value {
     pub fn as_u64(&self) -> Option<u64> {
         match self {
             Value::Int(i) => u64::try_from(*i).ok(),
-            Value::Counter(c) => Some(*c),
+            Value::Counter(c) | Value::Counter64(c) => Some(*c),
             Value::Gauge(g) | Value::Ticks(g) => Some(u64::from(*g)),
             _ => None,
+        }
+    }
+    /// No value: an unknown type, no such object or instance, end of the MIB view.
+    pub fn is_absent(&self) -> bool {
+        matches!(self, Value::Missing | Value::NoSuchObject | Value::NoSuchInstance | Value::EndOfView)
+    }
+    /// The ASN.1 / SMI name of the type ("OctetString", "Counter64"…).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Value::Int(_) => "Integer",
+            Value::Bytes(_) => "OctetString",
+            Value::Null => "Null",
+            Value::Oid(_) => "OID",
+            Value::Ip(_) => "IpAddress",
+            Value::Counter(_) => "Counter32",
+            Value::Counter64(_) => "Counter64",
+            Value::Gauge(_) => "Gauge32",
+            Value::Ticks(_) => "TimeTicks",
+            Value::Missing => "Unknown",
+            Value::NoSuchObject => "NoSuchObject",
+            Value::NoSuchInstance => "NoSuchInstance",
+            Value::EndOfView => "EndOfMibView",
         }
     }
     pub fn as_text(&self) -> Option<String> {
@@ -203,9 +230,12 @@ fn value(tag: u8, b: &[u8]) -> Value {
         0x05 => Value::Null,
         0x06 => Value::Oid(read_oid(b)),
         0x40 if b.len() == 4 => Value::Ip(Ipv4Addr::new(b[0], b[1], b[2], b[3])),
-        0x41 | 0x46 => Value::Counter(read_uint(b)),
+        0x41 => Value::Counter(read_uint(b)),
+        0x46 => Value::Counter64(read_uint(b)),
         0x42 => Value::Gauge(read_uint(b) as u32),
         0x43 => Value::Ticks(read_uint(b) as u32),
+        0x80 => Value::NoSuchObject,
+        0x81 => Value::NoSuchInstance,
         0x82 => Value::EndOfView,
         _ => Value::Missing,
     }
@@ -322,6 +352,11 @@ impl Session {
 
     pub async fn get(&self, oids: &[Oid]) -> io::Result<Vec<(Oid, Value)>> {
         self.ask(0xA0, oids, 0).await
+    }
+
+    /// One GETBULK step: up to `reps` cells after `from` (read-only).
+    pub async fn bulk(&self, from: &Oid, reps: i64) -> io::Result<Vec<(Oid, Value)>> {
+        self.ask(0xA5, std::slice::from_ref(from), reps).await
     }
 
     /// Every cell under `base` (at most `limit`).

@@ -295,6 +295,13 @@ export const ALERT_KINDS: AlertKind[] = [
   'poeBudget',
   'neighbourNew',
   'neighbourGone',
+  'streamGone',
+  'noReceivers',
+  'groupConflict',
+  'flooding',
+  'pairMissing',
+  'ptpGmChange',
+  'ptpDomain',
 ];
 
 export function alertLabel(k: AlertKind): string {
@@ -335,6 +342,20 @@ export function alertLabel(k: AlertKind): string {
       return t('New neighbour');
     case 'neighbourGone':
       return t('Neighbour gone');
+    case 'streamGone':
+      return t('Stream stopped');
+    case 'noReceivers':
+      return t('No receiver left');
+    case 'groupConflict':
+      return t('Group sent twice');
+    case 'flooding':
+      return t('Multicast flooding');
+    case 'pairMissing':
+      return t('Incomplete 2022-7 pair');
+    case 'ptpGmChange':
+      return t('Grandmaster change');
+    case 'ptpDomain':
+      return t('Other PTP domain');
   }
 }
 
@@ -357,6 +378,13 @@ export const ALERT_TONE: Record<AlertKind, string> = {
   poeBudget: 'ptp',
   neighbourNew: 'video',
   neighbourGone: '',
+  streamGone: 'bad',
+  noReceivers: 'ptp',
+  groupConflict: 'bad',
+  flooding: 'ptp',
+  pairMissing: 'ptp',
+  ptpGmChange: 'ptp',
+  ptpDomain: 'ptp',
 };
 
 const dec = (v: number, d = 1) => v.toLocaleString(locale(), { maximumFractionDigits: d });
@@ -422,6 +450,24 @@ export function alertDetail(a: Alert): string {
       return `${a.detail} · ${t('{n} °C (limit {limit} °C)', { n: dec(v), limit: dec(lim, 0) })}`;
     case 'poeBudget':
       return t('{n} % of the budget (limit {limit} %)', { n: dec(v), limit: dec(lim, 0) });
+    case 'groupConflict': {
+      const m = a.detail.match(/^(\S+) from (.+)$/);
+      return m ? t('{group} from {list}', { group: m[1], list: factText(m[2]) }) : factText(a.detail);
+    }
+    case 'flooding': {
+      const m = a.detail.match(/^(.*) · (\d+) groups: (.+)$/);
+      return m ? `${m[1].replace('no VLAN', t('no VLAN'))} · ${tn(Number(m[2]), '{n} group: {list}', '{n} groups: {list}', { list: m[3] })}` : a.detail;
+    }
+    case 'pairMissing':
+      return a.detail.replace(/ · other leg missing$/, ` · ${t('other leg missing')}`).replace(/ · (\S+) missing$/, (_, s: string) => ` · ${t('{stream} missing', { stream: s })}`);
+    case 'ptpGmChange': {
+      const m = a.detail.match(/^domain (\d+): (.+)$/);
+      return m ? `${t('domain {d}', { d: m[1] })} · ${m[2].replace(/\bnone\b/g, tc('gm', 'none'))}` : a.detail;
+    }
+    case 'ptpDomain': {
+      const m = a.detail.match(/^(.+) domain (\d+), grandmaster domain (\d+)$/);
+      return m ? t('{name}: domain {d}, grandmaster domain {g}', { name: m[1], d: m[2], g: m[3] }) : a.detail;
+    }
     default:
       return factText(a.detail);
   }

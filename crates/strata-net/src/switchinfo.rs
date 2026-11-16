@@ -351,7 +351,7 @@ fn reading(kind: u32, label: &str) -> Option<Reading> {
 fn num(v: &Value) -> Option<i64> {
     match v {
         Value::Int(i) => Some(*i),
-        Value::Counter(c) => i64::try_from(*c).ok(),
+        Value::Counter(c) | Value::Counter64(c) => i64::try_from(*c).ok(),
         Value::Gauge(g) | Value::Ticks(g) => Some(i64::from(*g)),
         _ => None,
     }
@@ -379,7 +379,7 @@ async fn column(s: &Session, base: &str, limit: usize) -> io::Result<Vec<(Vec<u3
     match s.walk(&b, limit).await {
         Ok(rows) => Ok(rows
             .into_iter()
-            .filter(|(o, v)| o.0.len() > b.0.len() && !matches!(v, Value::Missing | Value::Null))
+            .filter(|(o, v)| o.0.len() > b.0.len() && !v.is_absent() && *v != Value::Null)
             .map(|(o, v)| (o.suffix(&b).to_vec(), v))
             .collect()),
         Err(e) if refused(&e) => Ok(Vec::new()),

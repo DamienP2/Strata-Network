@@ -13,6 +13,7 @@ const Security = lazy(() => import('../settings/Security').then((m) => ({ defaul
 const General = lazy(() => import('../settings/Settings').then((m) => ({ default: m.General })));
 const Updates = lazy(() => import('../settings/Updates').then((m) => ({ default: m.Updates })));
 const History = lazy(() => import('../settings/History').then((m) => ({ default: m.History })));
+const Notifications = lazy(() => import('../settings/Notifications').then((m) => ({ default: m.Notifications })));
 const Snmp = lazy(() => import('../settings/Snmp').then((m) => ({ default: m.Snmp })));
 const Vlans = lazy(() => import('./Vlans').then((m) => ({ default: m.Vlans })));
 const Maintenance = lazy(() => import('../settings/Settings').then((m) => ({ default: m.Maintenance })));
@@ -51,7 +52,8 @@ export function SystemPage({ section, sub }: { section?: string; sub?: string })
         {current.id === 'maintenance' && <Maintenance />}
         {current.id === 'history' && <History />}
         {current.id === 'vlans' && <Vlans />}
-        {current.id === 'snmp' && <Snmp />}
+        {current.id === 'snmp' && <Snmp sub={sub} />}
+        {current.id === 'notifications' && <Notifications />}
       </Suspense>
     </SidePage>
   );

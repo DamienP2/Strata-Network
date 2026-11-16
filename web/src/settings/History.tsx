@@ -42,6 +42,8 @@ function actionText(a: string): string {
     'deleted switch model': () => t('deleted switch model'),
     'changed alert rules': () => t('changed alert rules'),
     'linked switches': () => t('linked switches'),
+    'changed notifications': () => t('changed notifications'),
+    'tested notification': () => t('tested notification'),
   };
   return known[a.toLowerCase()]?.() ?? a;
 }

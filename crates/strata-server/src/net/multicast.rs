@@ -17,7 +17,10 @@ pub fn iface_ip(name: &str) -> Option<Ipv4Addr> {
 
 /// (Re)starts listening on the interface of the settings.
 pub fn start(net: &Arc<Net>) {
-    let name = net.store.lock().unwrap().multicast.iface.clone();
+    let (name, flood) = {
+        let st = net.store.lock().unwrap();
+        (st.multicast.iface.clone(), st.multicast.more.flood_watch)
+    };
     let mut slot = net.mcast.lock().unwrap();
     if let Some(old) = slot.take() {
         old.close();
@@ -25,7 +28,10 @@ pub fn start(net: &Arc<Net>) {
     match iface_ip(&name) {
         Some(ip) => {
             tracing::info!("multicast: listening to SAP and PTP on {ip}");
-            *slot = Some(Engine::start(ip));
+            let e = Engine::start(ip);
+            e.set_flood_watch(flood);
+            *slot = Some(e);
+            super::mflows::GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         None => tracing::warn!("multicast: no network interface"),
     }
@@ -34,6 +40,7 @@ pub fn start(net: &Arc<Net>) {
     let n = net.clone();
     // Tells the clients when the streams change (at most every 2 s).
     WATCHING.call_once(|| {
+        super::mflows::spawn_watch(n.clone());
         tokio::spawn(async move {
             let mut last = (0usize, 0u64);
             loop {

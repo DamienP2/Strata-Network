@@ -38,3 +38,9 @@
 :root[data-theme='light'] .kind.bad { color: var(--t-red); }
 :root[data-theme='light'] .kind.data { color: var(--t-pink); }
 :root[data-theme='light'] .kind.ts { color: var(--mask); }
+:root[data-theme='light'] .wh-kind.teams { color: var(--t-violet); }
+:root[data-theme='light'] .wh-kind.slack { color: var(--t-pink); }
+:root[data-theme='light'] .ty.oid { color: var(--t-pink); }
+:root[data-theme='light'] { --mc-d: #a21caf; }
+:root[data-theme='light'] .pair .x { color: var(--t-red); }
+:root[data-theme='light'] .mn { box-shadow: 0 4px 14px rgba(22, 25, 37, 0.08); }

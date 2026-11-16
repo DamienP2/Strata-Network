@@ -15,11 +15,14 @@ use crate::paths::{new_id, now_ms, read_json};
 use crate::state::{AppState, Audience};
 
 pub mod api;
+pub mod explore;
 pub mod info;
 pub mod live;
+pub mod mflows;
 pub mod model;
 pub mod models;
 mod multicast;
+pub mod notify;
 pub mod rates;
 mod scanner;
 mod snmp;
@@ -107,6 +110,8 @@ pub struct Net {
     pub live: Mutex<HashMap<String, live::Runner>>,
     /// Bandwidth history of the switches' ports, read from `rates/` when first needed.
     pub rates: Mutex<HashMap<String, rates::SwitchRates>>,
+    /// Alert notifications (e-mail, webhooks).
+    pub notify: notify::Notifier,
 }
 
 fn load<T: serde::de::DeserializeOwned + Default>(dir: &std::path::Path, f: File) -> T {
@@ -153,7 +158,7 @@ impl Net {
             .name("net-writer".into())
             .spawn(move || {
                 while let Some((path, bytes)) = rx.blocking_recv() {
-                    if let Err(e) = crate::paths::write_atomic(&path, &bytes, path.ends_with(File::Snmp.name())) {
+                    if let Err(e) = crate::paths::write_atomic(&path, &bytes, path.ends_with(File::Snmp.name()) || path.ends_with(notify::FILE)) {
                         tracing::error!("cannot write {}: {e}", path.display());
                     }
                 }
@@ -161,6 +166,7 @@ impl Net {
             .expect("writer thread");
         #[cfg(unix)]
         strata_net::raise_file_limit();
+        let notify = notify::Notifier::load(&dir);
         let net = Arc::new(Net {
             dir,
             store: Mutex::new(store),
@@ -173,6 +179,7 @@ impl Net {
             watch: Mutex::default(),
             live: Mutex::default(),
             rates: Mutex::default(),
+            notify,
         });
         if migrated {
             net.save(&[File::Switches]);
@@ -183,6 +190,7 @@ impl Net {
         rates::spawn_saver(net.clone());
         multicast::start(&net);
         multicast::spawn_services(net.clone());
+        notify::spawn(net.clone());
         let online: Vec<String> = net.store.lock().unwrap().switches.iter().filter(|s| s.online).map(|s| s.id.clone()).collect();
         for id in online {
             net.start_live(&id);
@@ -231,6 +239,11 @@ impl Net {
         }
     }
 
+    /// Writes a file of `<data>/network/` that is not part of the store.
+    pub fn write_file(&self, name: &str, bytes: Vec<u8>) {
+        let _ = self.writer.send((self.dir.join(name), bytes));
+    }
+
     /// Writes one entry of the history.
     pub fn log(&self, user: &str, action: &str, target: &str, detail: &str) {
         {
@@ -254,6 +267,7 @@ impl Net {
         let network_id = st.network_of(ip).map(|n| n.id.clone());
         st.alerts.insert(0, Alert { id: new_id(), at: now_ms(), kind: kind.into(), ip, network_id, detail, seen: false, switch_id: None, port: None, value: None, limit: None });
         st.alerts.truncate(MAX_ALERTS);
+        self.notify.raised(st);
         true
     }
 
@@ -265,6 +279,7 @@ impl Net {
         let network_id = st.network_of(ip).map(|n| n.id.clone());
         st.alerts.insert(0, Alert { id: new_id(), at: now_ms(), kind: r.kind.into(), ip, network_id, detail: r.detail, seen: false, switch_id: Some(sw.id.clone()), port: r.port, value: r.value, limit: r.limit });
         st.alerts.truncate(MAX_ALERTS);
+        self.notify.raised(st);
         true
     }
 

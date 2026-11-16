@@ -165,6 +165,7 @@ pub fn router() -> Router<Shared> {
         // Real time
         .route("/ws", get(crate::ws::handler))
         .merge(crate::net::api::router())
+        .merge(crate::net::mflows::router())
 }
 
 #[cfg(test)]

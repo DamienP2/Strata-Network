@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { CircleCheck, CircleX, Network, Pencil, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react';
+import { CircleCheck, CircleX, Lock, Network, Pencil, Plus, RefreshCw, Save, SearchCode, Trash2, X } from 'lucide-react';
 import { t, tc, tn } from '../i18n';
 import { api } from '../store';
 import { Field, FieldGroup } from './ui';
@@ -7,12 +7,15 @@ import { Check, Segmented } from '../ui/fields';
 import { confirmDialog } from '../ui/dialogs';
 import { errorText } from '../ui/serverError';
 import { fmtAgo, fmtDateTime } from '../ui/format';
-import { PageHead } from '../pages/SidePage';
+import { PageHead, SubTabs } from '../pages/SidePage';
+import { navigate } from '../router';
+import { SnmpExplorer } from './SnmpExplorer';
 import { validIp } from '../net/ip';
 import { fail, useList } from '../net/model';
 import type { SnmpAgent, SnmpV3 } from '../net/types';
 
-export function Snmp() {
+export function Snmp({ sub }: { sub?: string }) {
+  const tab = sub === 'explorer' ? 'explorer' : 'agents';
   const [agents, , setAgents] = useList<SnmpAgent[]>('snmp', '/api/snmp');
   const [editing, setEditing] = useState<SnmpAgent | 'new' | null>(null);
   const [polling, setPolling] = useState<string | null>(null);
@@ -40,12 +43,28 @@ export function Snmp() {
   if (!agents) return <div className="loading">{t('Loading…')}</div>;
   return (
     <>
-      <PageHead title={t('SNMP')} sub={tn(agents.length, '{n} agent', '{n} agents')}>
-        <button className="btn primary" onClick={() => setEditing('new')}>
-          <Plus size={14} /> {t('New agent')}
-        </button>
+      <PageHead title={t('SNMP')} sub={tab === 'agents' ? tn(agents.length, '{n} agent', '{n} agents') : undefined}>
+        {tab === 'agents' ? (
+          <button className="btn primary" onClick={() => setEditing('new')}>
+            <Plus size={14} /> {t('New agent')}
+          </button>
+        ) : (
+          <span className="ro-badge">
+            <Lock size={12} /> {t('Read only')}
+          </span>
+        )}
       </PageHead>
-      {agents.length === 0 ? (
+      <SubTabs
+        current={tab}
+        onPick={(id) => navigate(id === 'explorer' ? '/system/snmp/explorer' : '/system/snmp')}
+        items={[
+          { id: 'agents', icon: <Network size={14} />, label: t('Agents'), count: agents.length },
+          { id: 'explorer', icon: <SearchCode size={14} />, label: t('Explorer') },
+        ]}
+      />
+      {tab === 'explorer' ? (
+        <SnmpExplorer agents={agents} />
+      ) : agents.length === 0 ? (
         <div className="empty big">
           <Network size={22} />
           <p>{t('No agent')}</p>

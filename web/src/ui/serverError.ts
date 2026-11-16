@@ -1,7 +1,7 @@
 import { t } from '../i18n';
 
 /** Motif anglais du serveur → texte de l'interface. */
-const KNOWN: [RegExp, () => string][] = [
+const KNOWN: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/failed to fetch|networkerror|load failed|network request failed/i, () => t('The server is not responding')],
   [/^wrong user name or password/i, () => t('Wrong user name or password.')],
   [/^too many tries/i, () => t('Too many tries: wait a moment, then try again.')],
@@ -57,6 +57,13 @@ const KNOWN: [RegExp, () => string][] = [
   [/^no such switch model/i, () => t('No such switch model')],
   [/the colour is written #rrggbb/i, () => t('The color is written #rrggbb')],
   [/the port of this stream is not known/i, () => t('The port of this stream is not known')],
+  [/the stream is heavier than the limit/i, () => t('The stream is heavier than the limit')],
+  [/the rate of this video stream is not known/i, () => t('The rate of this video stream is not known')],
+  [/the stream check is turned off/i, () => t('The stream check is turned off')],
+  [/this range overlaps another one/i, () => t('This range overlaps another one')],
+  [/a range is inside 224/i, () => t('A range is inside 224.0.0.0/4')],
+  [/a range holds at most/i, () => t('A range holds at most 65 536 groups (/16)')],
+  [/this group is already reserved/i, () => t('This group is already reserved')],
   [/no network interface/i, () => t('No network interface')],
   [/^no such network/i, () => t('No such network')],
   [/^no such switch/i, () => t('No such switch')],
@@ -69,11 +76,34 @@ const KNOWN: [RegExp, () => string][] = [
   [/the read interval is/i, () => t('The read interval is 5, 10, 30 or 60 seconds')],
   [/the range is 1h, 24h or 7d/i, () => t('The range is 1 h, 24 h or 7 days')],
   [/^no such port/i, () => t('No such port')],
+  [/^smtp: authentication failed/i, () => t('SMTP: authentication refused')],
+  [/^smtp: the server refused the message \((\d+)\)/i, (m) => t('SMTP: the server refused the message ({code})', { code: m[1] })],
+  [/^smtp: the server answered (\d+)/i, (m) => t('SMTP: the server answered {code}', { code: m[1] })],
+  [/^smtp: tls failed/i, () => t('SMTP: TLS failed (certificate or security?)')],
+  [/^smtp: the server does not offer starttls/i, () => t('SMTP: the server does not offer STARTTLS')],
+  [/^smtp: timed out/i, () => t('SMTP: no answer in time')],
+  [/^smtp: cannot connect/i, () => t('SMTP: cannot connect to the server')],
+  [/^webhook: the server answered (\d+)/i, (m) => t('Webhook: the server answered {code}', { code: m[1] })],
+  [/^webhook: timed out/i, () => t('Webhook: no answer in time')],
+  [/^webhook: unknown host/i, () => t('Webhook: unknown host')],
+  [/^webhook: tls failed/i, () => t('Webhook: TLS failed')],
+  [/^webhook: (cannot reach|bad url)/i, () => t('Webhook: cannot reach the server')],
+  [/^the smtp server cannot be empty/i, () => t('The SMTP server cannot be empty')],
+  [/^the email has no recipient/i, () => t('The email has no recipient')],
+  [/^the sender address cannot be empty/i, () => t('The sender address cannot be empty')],
+  [/^not an email address: (.*)/i, (m) => t('Not an email address: {a}', { a: m[1] })],
+  [/^the webhook url starts with/i, () => t('The webhook address starts with https://')],
+  [/^the email is not set up/i, () => t('The email is not set up')],
+  [/^no such webhook/i, () => t('No such webhook')],
+  [/^the oid is written/i, () => t('An OID is written with numbers and dots (1.3.6.1.2.1.1)')],
 ];
 
 /** Le message d'erreur à montrer ; le texte brut reste en infobulle. */
 export function friendlyError(raw: string): string {
-  for (const [re, text] of KNOWN) if (re.test(raw)) return text();
+  for (const [re, text] of KNOWN) {
+    const m = raw.match(re);
+    if (m) return text(m);
+  }
   return raw;
 }
 

@@ -3,7 +3,10 @@
 //! - SAP announcements (239.255.255.255 and 224.2.127.254, port 9875) are
 //!   listened to all the time: they give the streams' names and formats (SDP).
 //! - PTP (224.0.1.129, ports 319/320) is listened to all the time: domain and
-//!   grandmaster.
+//!   grandmaster, every clock that announces itself (`ptp`), and the devices
+//!   that ask for the delay (Delay_Req).
+//! - Flooding: when turned on, every 5 min, the interface is sampled for 1 s
+//!   for media packets of groups not joined (`flood`; receive only, Linux).
 //! - Routers' multicast routing tables, read by SNMP (see `snmp`), give the
 //!   other streams with their sources and rates: nothing is joined.
 //! - Nothing else is joined on its own: joining a group makes the network bring
@@ -20,6 +23,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
+
+use crate::mformat::Format;
+use crate::ptp;
 
 
 pub const SAP_GROUPS: [Ipv4Addr; 2] = [Ipv4Addr::new(239, 255, 255, 255), Ipv4Addr::new(224, 2, 127, 254)];
@@ -76,6 +82,37 @@ pub struct Stream {
     /// Seen in a router's multicast routing table.
     #[serde(default)]
     pub routed: bool,
+    /// Format read from the SDP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<Format>,
+    /// Bits per second the SDP implies (headers included).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub est_bps: Option<f64>,
+    /// Last SAP announcement (unix ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_announced: Option<u64>,
+    /// Time between the last two announcements (ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sap_interval_ms: Option<u64>,
+    /// The other leg of an ST 2022-7 pair named by the SDP (`a=group:DUP`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dup: Option<Leg>,
+    /// Last time its packets reached this machine without being joined (unix ms; 0 = never).
+    #[serde(default)]
+    pub flooded: u64,
+    /// The 802.1Q tag of those packets, when they carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flood_vlan: Option<u16>,
+}
+
+/// One leg of an ST 2022-7 pair.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Leg {
+    pub group: Ipv4Addr,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Ipv4Addr>,
 }
 
 impl Stream {
@@ -98,7 +135,33 @@ impl Stream {
             history: Vec::new(),
             announced: false,
             routed: false,
+            format: None,
+            est_bps: None,
+            last_announced: None,
+            sap_interval_ms: None,
+            dup: None,
+            flooded: 0,
+            flood_vlan: None,
         }
+    }
+
+    /// Takes what an announcement says.
+    fn take_sdp(&mut self, sdp: &Sdp, now: u64) {
+        self.announced = true;
+        self.name.clone_from(&sdp.name);
+        self.encoding.clone_from(&sdp.encoding);
+        if let Some(k) = sdp.kind {
+            self.kind = k;
+        }
+        self.est_bps = sdp.format.as_ref().and_then(Format::est_bps);
+        self.format.clone_from(&sdp.format);
+        self.dup.clone_from(&sdp.dup);
+        if let Some(last) = self.last_announced {
+            if now > last + 200 {
+                self.sap_interval_ms = Some(now - last);
+            }
+        }
+        self.last_announced = Some(now);
     }
 }
 
@@ -122,6 +185,11 @@ pub struct Sdp {
     pub kind: Option<Kind>,
     pub encoding: Option<String>,
     pub source: Option<Ipv4Addr>,
+    pub format: Option<Format>,
+    /// `a=mid`.
+    pub mid: Option<String>,
+    /// The other media of its `a=group:DUP` (ST 2022-7).
+    pub dup: Option<Leg>,
 }
 
 /// The medias of an SDP description.
@@ -129,8 +197,20 @@ pub fn parse_sdp(text: &str) -> Vec<Sdp> {
     let mut session = Sdp::default();
     let mut medias: Vec<Sdp> = Vec::new();
     let mut origin = None;
+    // Lines of the session, then of each media, for the formats.
+    let mut lines: Vec<Vec<(String, String)>> = vec![Vec::new()];
+    let mut dups: Vec<Vec<String>> = Vec::new();
     for line in text.lines().map(str::trim) {
         let Some((k, v)) = line.split_once('=') else { continue };
+        if k == "m" {
+            lines.push(Vec::new());
+        }
+        if let Some(l) = lines.last_mut() {
+            l.push((k.to_string(), v.to_string()));
+        }
+        if let Some(g) = v.strip_prefix("group:DUP").filter(|_| k == "a") {
+            dups.push(g.split_whitespace().map(str::to_string).collect());
+        }
         let cur = medias.last_mut().unwrap_or(&mut session);
         match k {
             "s" => session.name = Some(v.trim().to_string()).filter(|s| !s.is_empty() && s != "-"),
@@ -162,18 +242,31 @@ pub fn parse_sdp(text: &str) -> Vec<Sdp> {
                 } else if let Some(r) = v.strip_prefix("source-filter:") {
                     // incl IN IP4 <group> <source>
                     cur.source = r.split_whitespace().nth(4).and_then(|a| a.parse().ok());
+                } else if let Some(r) = v.strip_prefix("mid:") {
+                    cur.mid = Some(r.trim().to_string());
                 }
             }
             _ => {}
         }
     }
+    let session_lines = lines.first().cloned().unwrap_or_default();
     if medias.is_empty() {
         medias.push(session.clone());
+        lines.push(Vec::new());
     }
-    for m in &mut medias {
+    for (i, m) in medias.iter_mut().enumerate() {
         m.name = m.name.clone().or_else(|| session.name.clone());
         m.group = m.group.or(session.group);
         m.source = m.source.or(session.source).or(origin);
+        let own = lines.get(i + 1).map(Vec::as_slice).unwrap_or(&[]);
+        m.format = Some(Format::parse(&session_lines, own, m.encoding.as_deref()));
+    }
+    // ST 2022-7: the medias of one DUP group are the legs of one pair.
+    let legs: Vec<(Option<String>, Leg)> = medias.iter().map(|m| (m.mid.clone(), Leg { group: m.group.unwrap_or(Ipv4Addr::UNSPECIFIED), port: m.port, source: m.source })).collect();
+    for m in medias.iter_mut() {
+        let Some(mid) = m.mid.clone() else { continue };
+        let Some(group) = dups.iter().find(|g| g.contains(&mid)) else { continue };
+        m.dup = legs.iter().find(|(other, _)| other.as_ref().is_some_and(|o| o != &mid && group.contains(o))).map(|(_, l)| l.clone());
     }
     medias.retain(|m| m.group.is_some_and(|g| g.is_multicast()) && m.port != 0);
     medias
@@ -244,6 +337,9 @@ pub fn parse_ptp(p: &[u8]) -> Option<(u8, Option<String>)> {
 #[derive(Default)]
 struct State {
     streams: HashMap<Key, Stream>,
+    /// The SDP text of the last announcement, by (group, port).
+    sdps: HashMap<(Ipv4Addr, u16), String>,
+    ptp: ptp::Tracker,
     /// Counters for the continuous listeners: (bytes, packets) at the last tick.
     ticks: HashMap<Key, (u64, u64)>,
     bytes: HashMap<Key, u64>,
@@ -259,17 +355,14 @@ impl State {
             let (kind, rtp_type) = classify(p, port);
             let mut s = Stream::new(group, port, Some(source), kind, now);
             s.rtp_type = rtp_type;
-            if let Some(a) = &announced {
-                s.name.clone_from(&a.name);
-                s.encoding.clone_from(&a.encoding);
-                s.announced = true;
-                if a.kind != Kind::Rtp {
-                    s.kind = a.kind;
-                }
+            if let Some(a) = announced {
+                let first_seen = a.first_seen;
+                s = Stream { source: Some(source), rtp_type, kind: if a.kind != Kind::Rtp { a.kind } else { kind }, first_seen, last_seen: now, ..a };
             }
             s
         });
         if s.kind == Kind::Ptp {
+            self.ptp.record(source, p, now);
             if let Some((domain, gm)) = parse_ptp(p) {
                 s.ptp_domain = Some(domain);
                 if gm.is_some() {
@@ -284,29 +377,48 @@ impl State {
     }
 
     fn announce(&mut self, sdp: &Sdp, delete: bool) {
+        self.announce_at(sdp, delete, now_ms());
+    }
+
+    fn announce_at(&mut self, sdp: &Sdp, delete: bool, now: u64) {
         let (Some(group), port) = (sdp.group, sdp.port) else { return };
         if delete {
             self.streams.retain(|k, s| !(k.group == group && k.port == port && s.packets == 0));
+            self.sdps.remove(&(group, port));
             return;
         }
         let mut found = false;
         for s in self.streams.values_mut().filter(|s| s.group == group && s.port == port) {
             found = true;
-            s.announced = true;
-            s.name.clone_from(&sdp.name);
-            s.encoding.clone_from(&sdp.encoding);
-            if let Some(k) = sdp.kind {
-                s.kind = k;
-            }
+            s.take_sdp(sdp, now);
         }
         if !found {
-            let now = now_ms();
             let mut s = Stream::new(group, port, sdp.source, sdp.kind.unwrap_or(Kind::Rtp), now);
-            s.encoding.clone_from(&sdp.encoding);
-            s.name.clone_from(&sdp.name);
-            s.announced = true;
+            s.take_sdp(sdp, now);
             self.streams.insert(Key { group, port, source: None }, s);
         }
+    }
+
+    /// A group received without being joined (flood sample of `secs` seconds).
+    fn flooded(&mut self, f: &crate::flood::Seen, secs: f64, now: u64) {
+        let key = Key { group: f.group, port: f.port, source: Some(f.source) };
+        let announced = self.streams.remove(&Key { group: f.group, port: f.port, source: None });
+        let s = self.streams.entry(key).or_insert_with(|| {
+            let (kind, rtp_type) = classify(&f.head, f.port);
+            let kind = if kind == Kind::Other { Kind::Rtp } else { kind };
+            let mut s = Stream::new(f.group, f.port, Some(f.source), kind, now);
+            s.rtp_type = rtp_type;
+            if let Some(a) = announced {
+                s = Stream { source: Some(f.source), rtp_type, kind: if a.kind != Kind::Rtp { a.kind } else { kind }, ..a };
+            }
+            s
+        });
+        s.packets += f.packets;
+        s.last_seen = now;
+        s.flooded = now;
+        s.flood_vlan = f.vlan;
+        let secs = secs.max(0.1);
+        self.set_rate(key, f.bytes as f64 * 8.0 / secs, f.packets as f64 / secs);
     }
 
     fn set_rate(&mut self, key: Key, bps: f64, pps: f64) {
@@ -353,7 +465,34 @@ pub struct Engine {
     state: Arc<Mutex<State>>,
     closing: Arc<AtomicBool>,
     checking: Arc<AtomicBool>,
+    /// Checks started so far (a flood sample that saw one start is not trusted).
+    checks: Arc<std::sync::atomic::AtomicU64>,
+    flood: Arc<Mutex<FloodStatus>>,
+    /// Flood sampling turned on (off until said).
+    flood_on: Arc<AtomicBool>,
 }
+
+/// Flood sampling of the interface.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FloodStatus {
+    /// The interface name sampled.
+    pub iface: String,
+    /// Sampling turned on.
+    pub enabled: bool,
+    /// Samples work (false until the first one, and when they cannot run).
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Last sample (unix ms).
+    pub at: u64,
+    /// Groups found flooded at the last sample.
+    pub groups: Vec<Ipv4Addr>,
+}
+
+/// Time between two flood samples, and their length.
+pub const FLOOD_EVERY: Duration = Duration::from_secs(300);
+pub const FLOOD_SAMPLE_MS: u64 = 1000;
 
 /// Limits of an on-demand check of one stream.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -385,7 +524,7 @@ pub struct Check {
 impl Engine {
     /// Starts the SAP and PTP listeners on `iface` (the address of the interface).
     pub fn start(iface: Ipv4Addr) -> Engine {
-        let e = Engine { iface, state: Arc::default(), closing: Arc::default(), checking: Arc::default() };
+        let e = Engine::new(iface);
         for g in SAP_GROUPS {
             e.listen(g, SAP_PORT);
         }
@@ -400,7 +539,93 @@ impl Engine {
                 t.tick();
             }
         });
+        let t = e.clone();
+        tokio::spawn(async move { t.watch_floods().await });
         e
+    }
+
+    fn new(iface: Ipv4Addr) -> Engine {
+        Engine { iface, state: Arc::default(), closing: Arc::default(), checking: Arc::default(), checks: Arc::default(), flood: Arc::default(), flood_on: Arc::default() }
+    }
+
+    /// Turns flood sampling on or off (off when the engine starts).
+    pub fn set_flood_watch(&self, on: bool) {
+        self.flood_on.store(on, Ordering::Relaxed);
+        self.flood.lock().unwrap().enabled = on;
+    }
+
+    /// Samples the interface for floods until closed.
+    async fn watch_floods(&self) {
+        let name = if_addrs::get_if_addrs().unwrap_or_default().into_iter().find(|i| i.ip() == std::net::IpAddr::V4(self.iface)).map(|i| i.name);
+        let Some(name) = name else {
+            self.flood.lock().unwrap().error = Some("no interface with this address".into());
+            return;
+        };
+        self.flood.lock().unwrap().iface.clone_from(&name);
+        // The first sample 10 s after starting (or after being turned on), then every 5 minutes.
+        let mut next = Instant::now() + Duration::from_secs(10);
+        while !self.closing.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if !self.flood_on.load(Ordering::Relaxed) {
+                next = next.max(Instant::now() + Duration::from_secs(10));
+                continue;
+            }
+            if Instant::now() < next {
+                continue;
+            }
+            next = Instant::now() + FLOOD_EVERY;
+            let before = (self.checks.load(Ordering::SeqCst), self.is_checking());
+            let n = name.clone();
+            let r = tokio::task::spawn_blocking(move || crate::flood::sample(&n, FLOOD_SAMPLE_MS)).await.unwrap_or_else(|e| Err(io::Error::other(e.to_string())));
+            let checked = before.1 || self.is_checking() || self.checks.load(Ordering::SeqCst) != before.0;
+            let now = now_ms();
+            match r {
+                Ok(seen) => {
+                    let seen: Vec<_> = if checked { Vec::new() } else { seen };
+                    {
+                        let mut st = self.state.lock().unwrap();
+                        for f in &seen {
+                            st.flooded(f, FLOOD_SAMPLE_MS as f64 / 1000.0, now);
+                        }
+                    }
+                    let mut fs = self.flood.lock().unwrap();
+                    fs.available = true;
+                    fs.error = None;
+                    fs.at = now;
+                    if !checked {
+                        fs.groups = seen.iter().map(|s| s.group).collect();
+                        fs.groups.dedup();
+                    }
+                }
+                Err(e) => {
+                    let mut fs = self.flood.lock().unwrap();
+                    if fs.error.is_none() {
+                        tracing::info!("multicast: flood detection on {name} unavailable: {e}");
+                    }
+                    fs.available = false;
+                    fs.error = Some(e.to_string());
+                    fs.at = now;
+                    if matches!(e.kind(), io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The state of flood sampling.
+    pub fn flood_status(&self) -> FloodStatus {
+        self.flood.lock().unwrap().clone()
+    }
+
+    /// The clocks heard (PTP).
+    pub fn ptp(&self) -> ptp::Snapshot {
+        self.state.lock().unwrap().ptp.snapshot()
+    }
+
+    /// The SDP text of the last announcement of `group:port`.
+    pub fn sdp(&self, group: Ipv4Addr, port: u16) -> Option<String> {
+        self.state.lock().unwrap().sdps.get(&(group, port)).cloned()
     }
 
     pub fn iface(&self) -> Ipv4Addr {
@@ -429,11 +654,14 @@ impl Engine {
         st.streams.clear();
         st.bytes.clear();
         st.ticks.clear();
+        st.sdps.clear();
+        st.ptp = ptp::Tracker::default();
     }
 
     /// Rates of the continuously listened streams (SAP, PTP).
     fn tick(&self) {
         let mut st = self.state.lock().unwrap();
+        st.ptp.prune(now_ms());
         let keys: Vec<Key> = st.streams.iter().filter(|(_, s)| matches!(s.kind, Kind::Ptp | Kind::Sap)).map(|(k, _)| *k).collect();
         for k in keys {
             let bytes = st.bytes.get(&k).copied().unwrap_or(0);
@@ -464,6 +692,9 @@ impl Engine {
                     if let Some((delete, sdp)) = parse_sap(p) {
                         for m in parse_sdp(&sdp) {
                             st.announce(&m, delete);
+                            if let (Some(g), false) = (m.group, delete) {
+                                st.sdps.insert((g, m.port), sdp.clone());
+                            }
                         }
                     }
                 }
@@ -506,6 +737,7 @@ impl Engine {
         if self.checking.swap(true, Ordering::SeqCst) {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "a check is already running"));
         }
+        self.checks.fetch_add(1, Ordering::SeqCst);
         let r = self.check_one(group, port, opts).await;
         self.checking.store(false, Ordering::SeqCst);
         r
@@ -606,7 +838,60 @@ a=source-filter: incl IN IP4 239.10.1.1 10.20.1.22\r\na=rtpmap:96 raw/90000\r\nm
     }
 
     fn engine() -> Engine {
-        Engine { iface: Ipv4Addr::LOCALHOST, state: Arc::default(), closing: Arc::default(), checking: Arc::default() }
+        Engine::new(Ipv4Addr::LOCALHOST)
+    }
+
+    const DUP: &str = "v=0\r\no=- 7 1 IN IP4 10.10.1.11\r\ns=CAM-01 Video\r\nt=0 0\r\na=group:DUP primary secondary\r\n\
+m=video 5004 RTP/AVP 96\r\nc=IN IP4 239.10.1.1/64\r\na=source-filter: incl IN IP4 239.10.1.1 10.10.1.11\r\na=rtpmap:96 raw/90000\r\n\
+a=fmtp:96 sampling=YCbCr-4:2:2; width=1920; height=1080; exactframerate=50; depth=10; colorimetry=BT709\r\n\
+a=ts-refclk:ptp=IEEE1588-2008:EC-46-70-FF-FE-00-1A-2B:127\r\na=mediaclk:direct=0\r\na=mid:primary\r\n\
+m=video 5004 RTP/AVP 96\r\nc=IN IP4 239.20.1.1/64\r\na=source-filter: incl IN IP4 239.20.1.1 10.20.1.11\r\na=rtpmap:96 raw/90000\r\n\
+a=fmtp:96 sampling=YCbCr-4:2:2; width=1920; height=1080; exactframerate=50; depth=10; colorimetry=BT709\r\na=mid:secondary\r\n";
+
+    #[test]
+    fn sdp_dup_pairs_and_formats() {
+        let m = parse_sdp(DUP);
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[0].dup, Some(Leg { group: Ipv4Addr::new(239, 20, 1, 1), port: 5004, source: Some(Ipv4Addr::new(10, 20, 1, 11)) }));
+        assert_eq!(m[1].dup, Some(Leg { group: Ipv4Addr::new(239, 10, 1, 1), port: 5004, source: Some(Ipv4Addr::new(10, 10, 1, 11)) }));
+        let f = m[0].format.as_ref().unwrap();
+        assert_eq!((f.width, f.height, f.frame_rate, f.ptp_domain), (Some(1920), Some(1080), Some(50.0), Some(127)));
+        // The session's ts-refclk is not repeated: the second media has none of its own.
+        assert_eq!(m[1].format.as_ref().unwrap().ptp_gm, None);
+        assert!(parse_sdp(SDP).iter().all(|m| m.dup.is_none()));
+        let mut st = State::default();
+        st.announce_at(&m[0], false, 1000);
+        st.announce_at(&m[0], false, 31_000);
+        let s = st.streams.values().next().unwrap();
+        assert_eq!((s.last_announced, s.sap_interval_ms), (Some(31_000), Some(30_000)));
+        assert!((s.est_bps.unwrap() / 1e9 - 2.177).abs() < 0.01);
+        assert!(s.dup.is_some());
+    }
+
+    #[test]
+    fn floods_become_streams() {
+        let mut st = State::default();
+        st.announce(&parse_sdp(SDP)[0], false);
+        let mut head = vec![0x80, 96, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1];
+        head.resize(32, 0);
+        let f = crate::flood::Seen { group: Ipv4Addr::new(239, 10, 1, 1), port: 5004, source: Ipv4Addr::new(10, 20, 1, 22), packets: 2000, bytes: 2_400_000, vlan: Some(110), head };
+        st.flooded(&f, 2.0, 5000);
+        assert_eq!(st.streams.len(), 1);
+        let s = st.streams.values().next().unwrap();
+        assert_eq!((s.flooded, s.flood_vlan, s.announced, s.kind), (5000, Some(110), true, Kind::Video));
+        assert_eq!((s.bps, s.pps), (9_600_000.0, 1000.0));
+    }
+
+    #[test]
+    fn ptp_packets_feed_the_tracker() {
+        let mut st = State::default();
+        let gm = [0xEC, 0x46, 0x70, 0xFF, 0xFE, 0, 0x1A, 0x2B];
+        let a = ptp::Announce { priority1: 128, clock_class: 6, clock_accuracy: 0x21, variance: 0x4E5D, priority2: 128, gm, steps_removed: 0, time_source: 0x20, utc_offset: 37 };
+        st.record(PTP_GROUP, 320, Ipv4Addr::new(10, 99, 0, 47), &ptp::build(ptp::MSG_ANNOUNCE, 127, gm, Some(&a)));
+        st.record(PTP_GROUP, 319, Ipv4Addr::new(10, 10, 1, 11), &ptp::build(ptp::MSG_DELAY_REQ, 127, [1; 8], None));
+        let s = st.ptp.snapshot();
+        assert_eq!((s.announcers.len(), s.followers.len()), (1, 1));
+        assert_eq!(s.announcers[0].gm, "EC:46:70:FF:FE:00:1A:2B");
     }
 
     #[test]
