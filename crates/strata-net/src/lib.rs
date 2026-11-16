@@ -13,6 +13,7 @@ pub mod ports;
 pub mod probe;
 pub mod scan;
 pub mod snmp;
+pub mod snmpv3;
 
 /// Raises the open-file limit to its hard maximum (scans hold many sockets);
 /// returns the limit now in force.

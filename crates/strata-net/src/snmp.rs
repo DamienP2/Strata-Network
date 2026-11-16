@@ -94,14 +94,14 @@ fn put_len(out: &mut Vec<u8>, len: usize) {
     }
 }
 
-fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+pub(crate) fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
     let mut out = vec![tag];
     put_len(&mut out, body.len());
     out.extend_from_slice(body);
     out
 }
 
-fn int(v: i64) -> Vec<u8> {
+pub(crate) fn int(v: i64) -> Vec<u8> {
     let bytes = v.to_be_bytes();
     let mut start = 0;
     while start < 7 && ((bytes[start] == 0 && bytes[start + 1] & 0x80 == 0) || (bytes[start] == 0xFF && bytes[start + 1] & 0x80 != 0)) {
@@ -130,19 +130,23 @@ fn oid(o: &Oid) -> Vec<u8> {
 
 /// One PDU: GET (0xA0), GETNEXT (0xA1) or GETBULK (0xA5, with max repetitions).
 pub fn request(community: &str, pdu: u8, id: i32, oids: &[Oid], max_rep: i64) -> Vec<u8> {
-    let binds: Vec<u8> = oids.iter().flat_map(|o| tlv(0x30, &[oid(o), vec![0x05, 0]].concat())).collect();
-    let (a, b) = if pdu == 0xA5 { (0, max_rep) } else { (0, 0) };
-    let body = [int(i64::from(id)), int(a), int(b), tlv(0x30, &binds)].concat();
-    tlv(0x30, &[int(1), tlv(0x04, community.as_bytes()), tlv(pdu, &body)].concat())
+    tlv(0x30, &[int(1), tlv(0x04, community.as_bytes()), pdu_bytes(pdu, id, oids, max_rep)].concat())
 }
 
-struct Reader<'a> {
-    b: &'a [u8],
-    pos: usize,
+/// A PDU (GET 0xA0, GETNEXT 0xA1, GETBULK 0xA5 with max repetitions).
+pub(crate) fn pdu_bytes(pdu: u8, id: i32, oids: &[Oid], max_rep: i64) -> Vec<u8> {
+    let binds: Vec<u8> = oids.iter().flat_map(|o| tlv(0x30, &[oid(o), vec![0x05, 0]].concat())).collect();
+    let (a, b) = if pdu == 0xA5 { (0, max_rep) } else { (0, 0) };
+    tlv(pdu, &[int(i64::from(id)), int(a), int(b), tlv(0x30, &binds)].concat())
+}
+
+pub(crate) struct Reader<'a> {
+    pub(crate) b: &'a [u8],
+    pub(crate) pos: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn next(&mut self) -> Option<(u8, &'a [u8])> {
+    pub(crate) fn next(&mut self) -> Option<(u8, &'a [u8])> {
         let tag = *self.b.get(self.pos)?;
         let mut len = usize::from(*self.b.get(self.pos + 1)?);
         let mut p = self.pos + 2;
@@ -163,7 +167,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn read_int(b: &[u8]) -> i64 {
+pub(crate) fn read_int(b: &[u8]) -> i64 {
     let mut v: i64 = if b.first().is_some_and(|x| x & 0x80 != 0) { -1 } else { 0 };
     for x in b.iter().take(8) {
         v = (v << 8) | i64::from(*x);
@@ -223,6 +227,11 @@ pub fn parse_response(b: &[u8]) -> Option<Response> {
     if pdu != 0xA2 {
         return None;
     }
+    parse_pdu(body)
+}
+
+/// The inside of a response or report PDU: (request id, error status, bindings).
+pub(crate) fn parse_pdu(body: &[u8]) -> Option<Response> {
     let mut p = Reader { b: body, pos: 0 };
     let id = read_int(p.next()?.1) as i32;
     let status = read_int(p.next()?.1);
@@ -261,6 +270,7 @@ pub struct Session {
     community: String,
     timeout: Duration,
     retries: u32,
+    v3: Option<crate::snmpv3::V3Session>,
 }
 
 fn err(m: &str) -> io::Error {
@@ -270,10 +280,21 @@ fn err(m: &str) -> io::Error {
 impl Session {
     pub async fn open(agent: &Agent, timeout: Duration) -> io::Result<Session> {
         let sock = UdpSocket::bind("0.0.0.0:0").await?;
-        Ok(Session { sock, agent: SocketAddr::from((agent.ip, agent.port)), community: agent.community.clone(), timeout, retries: 2 })
+        Ok(Session { sock, agent: SocketAddr::from((agent.ip, agent.port)), community: agent.community.clone(), timeout, retries: 2, v3: None })
+    }
+
+    /// An SNMP v3 session (user-based security): finds the agent's engine first.
+    pub async fn open_v3(ip: Ipv4Addr, port: u16, user: &crate::snmpv3::V3, timeout: Duration) -> io::Result<Session> {
+        let sock = UdpSocket::bind("0.0.0.0:0").await?;
+        let agent = SocketAddr::from((ip, port));
+        let v3 = crate::snmpv3::V3Session::discover(&sock, agent, user, timeout).await?;
+        Ok(Session { sock, agent, community: String::new(), timeout, retries: 2, v3: Some(v3) })
     }
 
     async fn ask(&self, pdu: u8, oids: &[Oid], max_rep: i64) -> io::Result<Vec<(Oid, Value)>> {
+        if let Some(v3) = &self.v3 {
+            return v3.ask(&self.sock, self.agent, pdu, oids, max_rep, self.timeout, self.retries).await;
+        }
         let id = rand::random::<i32>() & 0x7FFF_FFFF;
         let req = request(&self.community, pdu, id, oids, max_rep);
         let mut buf = vec![0u8; 65_535];
@@ -369,6 +390,31 @@ pub mod oids {
     pub const Q_VLAN_NAME: &str = "1.3.6.1.2.1.17.7.1.4.3.1.1"; // dot1qVlanStaticName.vlan
     pub const Q_VLAN_EGRESS: &str = "1.3.6.1.2.1.17.7.1.4.3.1.2"; // dot1qVlanStaticEgressPorts.vlan
     pub const Q_VLAN_UNTAGGED: &str = "1.3.6.1.2.1.17.7.1.4.3.1.4"; // dot1qVlanStaticUntaggedPorts.vlan
+    // Cisco (IOS, IOS-XE, NX-OS): access VLAN, trunks and VLAN names
+    pub const CISCO_VM_VLAN: &str = "1.3.6.1.4.1.9.9.68.1.2.2.1.2"; // vmVlan.ifIndex
+    pub const CISCO_TRUNK_ENABLED: &str = "1.3.6.1.4.1.9.9.46.1.6.1.1.4"; // vlanTrunkPortVlansEnabled (0-1023)
+    pub const CISCO_TRUNK_NATIVE: &str = "1.3.6.1.4.1.9.9.46.1.6.1.1.5"; // vlanTrunkPortNativeVlan
+    pub const CISCO_TRUNK_STATUS: &str = "1.3.6.1.4.1.9.9.46.1.6.1.1.14"; // vlanTrunkPortDynamicStatus: 1 trunking
+    pub const CISCO_TRUNK_ENABLED_2K: &str = "1.3.6.1.4.1.9.9.46.1.6.1.1.17"; // 1024-2047
+    pub const CISCO_TRUNK_ENABLED_3K: &str = "1.3.6.1.4.1.9.9.46.1.6.1.1.18"; // 2048-3071
+    pub const CISCO_TRUNK_ENABLED_4K: &str = "1.3.6.1.4.1.9.9.46.1.6.1.1.19"; // 3072-4095
+    pub const CISCO_VTP_VLAN_NAME: &str = "1.3.6.1.4.1.9.9.46.1.3.1.1.4.1"; // vtpVlanName.1.vlan
+}
+
+/// The VLANs set in a Cisco VLAN bitmap whose first bit is VLAN `first`.
+pub fn vlan_bits(bytes: &[u8], first: u16) -> Vec<u16> {
+    let mut out = Vec::new();
+    for (i, b) in bytes.iter().enumerate() {
+        for bit in 0..8 {
+            if b & (0x80 >> bit) != 0 {
+                let v = first as usize + i * 8 + bit;
+                if (1..=4094).contains(&v) {
+                    out.push(v as u16);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// What a switch says about itself.
@@ -532,11 +578,57 @@ pub async fn vlan_setup(s: &Session) -> io::Result<VlanSetup> {
             list.entry(i).or_default().push(vlan);
         }
     }
+    cisco_vlans(s, &mut out).await;
     for l in out.untagged.values_mut().chain(out.tagged.values_mut()) {
         l.sort_unstable();
         l.dedup();
     }
     Ok(out)
+}
+
+/// Cisco switches (notably Nexus) describe access ports and trunks in their
+/// own MIBs, more reliably than Q-BRIDGE: when they answer, they win.
+async fn cisco_vlans(s: &Session, out: &mut VlanSetup) {
+    let walk = |base: &'static str| async move {
+        let b = Oid::parse(base);
+        s.walk(&b, 20_000).await.unwrap_or_default().into_iter().filter_map(move |(o, v)| Some((*o.suffix(&b).first()?, v))).collect::<Vec<(u32, Value)>>()
+    };
+    let names = Oid::parse(oids::CISCO_VTP_VLAN_NAME);
+    for (o, v) in s.walk(&names, 5_000).await.unwrap_or_default() {
+        if let Some(vlan) = o.suffix(&names).first() {
+            out.names.entry(*vlan as u16).or_insert_with(|| v.as_text().unwrap_or_default());
+        }
+    }
+    // Access ports.
+    for (i, v) in walk(oids::CISCO_VM_VLAN).await {
+        if let Some(vlan) = v.as_u64().map(|x| x as u16).filter(|x| *x > 0) {
+            out.pvid.insert(i, vlan);
+            out.untagged.insert(i, vec![vlan]);
+            out.tagged.remove(&i);
+        }
+    }
+    // Trunks: allowed VLANs (only those that exist on the switch), native VLAN untagged.
+    let trunking: Vec<u32> = walk(oids::CISCO_TRUNK_STATUS).await.into_iter().filter(|(_, v)| v.as_u64() == Some(1)).map(|(i, _)| i).collect();
+    if trunking.is_empty() {
+        return;
+    }
+    let natives: HashMap<u32, u16> = walk(oids::CISCO_TRUNK_NATIVE).await.into_iter().filter_map(|(i, v)| Some((i, v.as_u64()? as u16))).collect();
+    let mut allowed: HashMap<u32, Vec<u16>> = HashMap::new();
+    for (base, first) in [(oids::CISCO_TRUNK_ENABLED, 0u16), (oids::CISCO_TRUNK_ENABLED_2K, 1024), (oids::CISCO_TRUNK_ENABLED_3K, 2048), (oids::CISCO_TRUNK_ENABLED_4K, 3072)] {
+        for (i, v) in walk(base).await {
+            if let Value::Bytes(b) = v {
+                allowed.entry(i).or_default().extend(vlan_bits(&b, first));
+            }
+        }
+    }
+    let exists = |v: &u16| out.names.is_empty() || out.names.contains_key(v);
+    for i in trunking {
+        let native = natives.get(&i).copied().unwrap_or(1);
+        let tagged: Vec<u16> = allowed.get(&i).map(|l| l.iter().copied().filter(|v| *v != native && exists(v)).collect()).unwrap_or_default();
+        out.pvid.insert(i, native);
+        out.untagged.insert(i, vec![native]);
+        out.tagged.insert(i, tagged);
+    }
 }
 
 /// Who the agent is.
@@ -700,6 +792,14 @@ mod tests {
         assert_eq!(read_int(&int(-129)[2..]), -129);
         assert_eq!(read_int(&int(128)[2..]), 128);
         assert_eq!(int(0), vec![2, 1, 0]);
+    }
+
+    #[test]
+    fn cisco_vlan_bitmaps() {
+        // VLAN 0 is the first bit: 0b0110_0000 = VLANs 1 and 2.
+        assert_eq!(vlan_bits(&[0b0110_0000, 0b1000_0000], 0), vec![1, 2, 8]);
+        assert_eq!(vlan_bits(&[0b1000_0000], 1024), vec![1024]);
+        assert_eq!(vlan_bits(&[0xFF; 128], 3072).last(), Some(&4094));
     }
 
     #[test]
