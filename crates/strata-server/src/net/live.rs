@@ -211,7 +211,8 @@ fn describe(mode: &str, vlan: Option<u16>, tagged: &[u16]) -> String {
 }
 
 /// How the port differs between the switch and the inventory, if it does.
-/// A trunk's native VLAN is compared only when the inventory sets one.
+/// A trunk's native VLAN is compared only when the inventory sets one; an
+/// access port on VLAN 1 matches an inventory port without VLAN.
 pub fn diff_of(p: &SwitchPort, sw: &Setup) -> Option<Diff> {
     let d = |field, switch: String, inventory: String| Some(Diff { n: p.n, field, switch, inventory });
     let inv = || describe(&p.mode, p.vlan, &p.tagged);
@@ -222,7 +223,9 @@ pub fn diff_of(p: &SwitchPort, sw: &Setup) -> Option<Diff> {
         return d("mode", describe(sw.mode, sw.vlan, &sw.tagged), inv());
     }
     if sw.mode == "access" {
-        return if p.vlan == sw.vlan { None } else { d("vlan", vlan_text(sw.vlan), vlan_text(p.vlan)) };
+        // VLAN 1 is where a switch leaves the ports nobody set up: same as no VLAN in the inventory.
+        let same = p.vlan == sw.vlan || (p.vlan.is_none() && sw.vlan == Some(1));
+        return if same { None } else { d("vlan", vlan_text(sw.vlan), vlan_text(p.vlan)) };
     }
     if p.tagged != sw.tagged {
         return d("tagged", describe("trunk", None, &sw.tagged), inv());
@@ -495,6 +498,13 @@ mod tests {
         assert_eq!(diffs(&s2, &l.ports, l.vlans.as_deref().unwrap()).last().map(|d| (d.n, d.field)), Some((5, "vlan")));
         s2.ports[4].tagged = vec![10];
         assert_eq!(diffs(&s2, &l.ports, l.vlans.as_deref().unwrap()).last().map(|d| (d.n, d.field, d.switch.clone())), Some((5, "tagged", "trunk 10, 20".to_string())));
+        // VLAN 1 (the switch's default) and no VLAN in the inventory: nothing to say.
+        let one = [pv(1, 1, &[1], &[])];
+        let mut bare = sw();
+        bare.ports[0].vlan = None;
+        assert!(diffs(&bare, &l.ports[..1], &one).is_empty());
+        bare.ports[0].vlan = Some(10);
+        assert_eq!(diffs(&bare, &l.ports[..1], &one)[0].switch, "VLAN 1");
         // Disabled on both sides: nothing to say.
         s2.ports[2].mode = "off".into();
         assert!(diffs(&s2, &l.ports, l.vlans.as_deref().unwrap()).iter().all(|d| d.n != 3));

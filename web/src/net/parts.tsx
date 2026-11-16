@@ -116,9 +116,17 @@ export function PortChip({ ip, p, svc, hidden, children }: { ip: string; p: Addr
  * A table cell that reads like text and becomes a field on click (Enter or leaving saves, Escape cancels).
  * Read-only users see the plain text.
  */
-export function InlineText({ value, placeholder, editable, onSave }: { value: string; placeholder?: string; editable: boolean; onSave: (v: string) => void }) {
+export function InlineText({ value, placeholder, editable, extra, onSave }: { value: string; placeholder?: string; editable: boolean; extra?: ReactNode; onSave: (v: string) => void }) {
   const [editing, setEditing] = useState(false);
-  if (!editable) return <span className="cell-text">{value}</span>;
+  if (!editable)
+    return extra ? (
+      <div className="ed ro">
+        <span>{value}</span>
+        {extra}
+      </div>
+    ) : (
+      <span className="cell-text">{value}</span>
+    );
   if (editing)
     return (
       <div className="ed editing">
@@ -139,6 +147,7 @@ export function InlineText({ value, placeholder, editable, onSave }: { value: st
       }}
     >
       <span className={value ? '' : 'ph'}>{value || placeholder}</span>
+      {extra}
     </div>
   );
 }

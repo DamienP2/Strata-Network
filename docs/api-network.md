@@ -186,7 +186,7 @@ WebSocket, besides `changed`:
   (`GigabitEthernet1/0/12` = `Gi1/0/12`). The switch's setup of a port: off when administratively down, trunk when
   it carries tagged VLANs (native = the PVID when it leaves untagged), else access on the PVID; it differs from the
   inventory when the mode, the access VLAN or the tagged VLANs differ (a trunk's native VLAN only when the
-  inventory sets one). `take` copies mode, VLAN and tagged VLANs (a disabled port keeps its VLANs), and the port
+  inventory sets one; VLAN 1, where switches leave unconfigured ports, matches an inventory port without VLAN). `take` copies mode, VLAN and tagged VLANs (a disabled port keeps its VLANs), and the port
   description as label when the inventory has none. Removing the switch's agent puts it offline.
 - **History**: every write route above adds an entry (`action`: "created network", "scanned", "changed port", "switch online", "switch offline",
   "changed read interval", "took config from switch", …).
