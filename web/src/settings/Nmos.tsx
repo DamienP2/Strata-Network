@@ -26,6 +26,8 @@ const validNodeUrl = (s: string) => /^((https?):\/\/)?[A-Za-z0-9._-]+(:\d{1,5})?
 const validRange = (s: string) => /^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2}|-\d{1,3}(\.\d{1,3}){3}|-\d{1,3})?$/.test(s.trim());
 
 /** Des pastilles ; Entrée, virgule ou espace en ajoute une (comme les destinataires des notifications). */
+const validPort = (s: string) => /^\d{1,5}$/.test(s) && Number(s) > 0 && Number(s) < 65536;
+
 function Chips({ value, onChange, valid, placeholder, name }: { value: string[]; onChange: (v: string[]) => void; valid: (s: string) => boolean; placeholder: string; name?: (s: string) => string | undefined }) {
   const [text, setText] = useState('');
   const add = () => {
@@ -211,6 +213,11 @@ export function Nmos() {
             <Check checked={draft.probeScan} onChange={(probeScan) => set({ probeScan })}>
               {t('Also look among the scanned machines')}
             </Check>
+            {draft.probeScan && (
+              <FieldGroup label={t('NMOS ports')}>
+                <Chips value={(draft.nodePorts ?? []).map(String)} onChange={(v) => set({ nodePorts: v.map(Number) })} valid={validPort} placeholder="8080" />
+              </FieldGroup>
+            )}
           </>
         ) : (
           <>

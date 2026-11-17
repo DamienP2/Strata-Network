@@ -456,6 +456,8 @@ interface NmosSettings {       // admin only
   probeScan: boolean;          // nodes: also look for Node APIs on the web ports of the scanned machines (default true)
   ranges: string[];            // nodes: where to look, CIDR "10.99.0.0/16" (any size) or "10.1.1.10-10.1.1.50"; ≤ 100;
                                // [] = automatic: the scan networks a local interface is in, else everywhere
+  nodePorts: number[];         // nodes: ports tried on every machine of the ranges by the scan probe, besides its web ports
+                               // and the ports the nodes found use (default 80 443 3000 5005 8000 8080 8081 8443; ≤ 32)
 }
 interface NmosStatus {
   enabled: boolean; source: 'registry' | 'nodes';
@@ -688,9 +690,11 @@ WebSocket, besides `changed`:
       server with an OOB and an IB interface asks on both), 3 times 1 s apart, 3 s for the answers, every 60 s. A
       Node API heard stays polled 10 min after it was last heard, and as long as it answers. `<api_proto>://<ip,
       else host>:<port>`.
-    - *Scan* (`probeScan`): the inventory addresses inside the ranges that have a web port (scan `ports[].web`) are
-      asked `GET <scheme>://ip:port/x-nmos/node/` (each web port until one answers a list of versions), 16 machines a
-      round, 4 at once, 1 s to connect, 2 s a request, each machine at most once an hour; never the addresses of a node
+    - *Scan* (`probeScan`): every inventory address inside the ranges that answers (or has open ports) is tried on its
+      web ports (scan `ports[].web`, with their scheme), then on the ports the nodes already found use (up to 8, most
+      used first), then on `nodePorts` (https on 443/8443, else http): a TCP connection first (600 ms; a refused or
+      silent port is skipped), then `GET <scheme>://ip:port/x-nmos/node/` until one answers a list of versions;
+      16 machines a round, 4 at once, 2 s a request, each machine at most once an hour; never the addresses of a node
       already known. A Node API found stays polled 10 min after it was found, and as long as it answers.
     - *Typed* (`nodeUrls`): always polled (mDNS may not reach them).
     - *One node*: a Node API reached at several addresses (mDNS name and IP, OOB and typed…) is one node (same

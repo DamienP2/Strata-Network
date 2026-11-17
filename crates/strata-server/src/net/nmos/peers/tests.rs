@@ -321,3 +321,13 @@ fn mdns_answers_to_bases() {
     ]);
     assert_eq!(h, vec![("http://10.99.0.7:8080".to_string(), "bidi4-01".to_string()), ("https://mv-01.local:443".to_string(), "mv-01".to_string())]);
 }
+
+#[test]
+fn probe_ports_web_then_learned_then_settings() {
+    let web = vec![(8080u16, "http".to_string()), (443u16, "https".to_string())];
+    let got = candidate_ports(&web, &[5005, 8080], &[80, 443, 3000, 5005]);
+    let ports: Vec<(u16, &str)> = got.iter().map(|(p, s)| (*p, s.as_str())).collect();
+    assert_eq!(ports, vec![(8080, "http"), (443, "https"), (5005, "http"), (80, "http"), (3000, "http")]);
+    let none = candidate_ports(&[], &[], &[8443]);
+    assert_eq!(none, vec![(8443, "https".to_string())]);
+}

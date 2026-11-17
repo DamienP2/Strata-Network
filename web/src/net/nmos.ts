@@ -15,6 +15,7 @@ export interface NmosSettings {
   nodeUrls: string[];
   probeScan: boolean;
   ranges: string[];
+  nodePorts: number[];
 }
 
 export interface NmosStatus {

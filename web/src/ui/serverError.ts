@@ -92,6 +92,8 @@ const KNOWN: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^nmos range (\S+)/i, (m) => t('NMOS: wrong range {range}', { range: m[1] })],
   [/the nmos source is registry or nodes/i, () => t('The NMOS source is the registry or the nodes')],
   [/at most (\d+) node addresses/i, (m) => t('At most {n} node addresses', { n: m[1] })],
+  [/at most (\d+) nmos ports/i, (m) => t('At most {n} NMOS ports', { n: m[1] })],
+  [/an nmos port cannot be 0/i, () => t('An NMOS port cannot be 0')],
   [/at most (\d+) nmos ranges/i, (m) => t('At most {n} ranges', { n: m[1] })],
   [/^nmos: the answer is too big/i, () => t('NMOS: the answer is too big')],
   [/^nmos: bad url/i, () => t('NMOS: bad address')],

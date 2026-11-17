@@ -96,11 +96,23 @@ pub struct Settings {
     /// inside. Empty: the scan networks a local interface is in (else everywhere).
     #[serde(default)]
     pub ranges: Vec<String>,
+    /// Nodes mode: the ports tried on every machine of the ranges (besides its
+    /// web ports and the ports the nodes already found use).
+    #[serde(default = "default_node_ports")]
+    pub node_ports: Vec<u16>,
 }
+
+/// Ports Node APIs commonly use.
+pub fn default_node_ports() -> Vec<u16> {
+    vec![80, 443, 3000, 5005, 8000, 8080, 8081, 8443]
+}
+
+/// Ports tried by hand, at most.
+pub const MAX_NODE_PORTS: usize = 32;
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { enabled: false, url: String::new(), version: default_version(), refresh: default_refresh(), source: "nodes".into(), node_urls: Vec::new(), probe_scan: true, ranges: Vec::new() }
+        Settings { enabled: false, url: String::new(), version: default_version(), refresh: default_refresh(), source: "nodes".into(), node_urls: Vec::new(), probe_scan: true, ranges: Vec::new(), node_ports: default_node_ports() }
     }
 }
 
@@ -151,6 +163,19 @@ impl Settings {
             return Err(format!("at most {MAX_NODE_URLS} nmos ranges"));
         }
         self.ranges = ranges;
+        let mut ports: Vec<u16> = Vec::new();
+        for port in &self.node_ports {
+            if *port == 0 {
+                return Err("an nmos port cannot be 0".into());
+            }
+            if !ports.contains(port) {
+                ports.push(*port);
+            }
+        }
+        if ports.len() > MAX_NODE_PORTS {
+            return Err(format!("at most {MAX_NODE_PORTS} nmos ports"));
+        }
+        self.node_ports = ports;
         if !matches!(self.version.as_str(), "v1.2" | "v1.3") {
             return Err("the nmos version is v1.2 or v1.3".into());
         }
@@ -180,7 +205,8 @@ impl Settings {
         let on = if self.enabled { "on" } else { "off" };
         if self.nodes_mode() {
             let urls = if self.node_urls.is_empty() { "no address".to_string() } else { self.node_urls.join(", ") };
-            return format!("{on} · nodes · {urls} · scan {} · {}", if self.probe_scan { "on" } else { "off" }, self.refresh);
+            let ports = self.node_ports.iter().map(u16::to_string).collect::<Vec<_>>().join(" ");
+            return format!("{on} · nodes · {urls} · scan {} (ports {ports}) · {}", if self.probe_scan { "on" } else { "off" }, self.refresh);
         }
         format!("{on} · {} · {} · {}", if self.url.is_empty() { "no address" } else { &self.url }, self.version, self.refresh)
     }

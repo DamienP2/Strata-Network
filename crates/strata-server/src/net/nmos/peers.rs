@@ -42,6 +42,8 @@ const NODE_CONNECT: Duration = Duration::from_secs(2);
 const NODE_REQUEST: Duration = Duration::from_secs(5);
 const PROBE_CONNECT: Duration = Duration::from_secs(1);
 const PROBE_REQUEST: Duration = Duration::from_secs(2);
+/// A port that does not take a TCP connection this fast is not asked.
+const PROBE_TCP: Duration = Duration::from_millis(600);
 /// Largest answer of a Node API (JSON).
 const NODE_JSON_LIMIT: u64 = 16 << 20;
 const SMALL_LIMIT: u64 = 256 << 10;
@@ -502,11 +504,41 @@ pub fn check_node(base: &str, found: Vec<FoundBy>, get: &Get) -> Checked {
     c
 }
 
-/// Whether `ip:port` (`scheme`) serves a Node API: its base.
+/// Whether `ip:port` (`scheme`) serves a Node API: its base. A port that
+/// refuses or does not answer a TCP connection quickly is skipped without an
+/// HTTP request.
 pub fn probe_port(ip: Ipv4Addr, port: u16, scheme: &str, get: &Get) -> Option<String> {
+    let addr = std::net::SocketAddr::from((ip, port));
+    std::net::TcpStream::connect_timeout(&addr, PROBE_TCP).ok()?;
     let scheme = if scheme == "https" { "https" } else { "http" };
     let base = format!("{scheme}://{ip}:{port}");
     node_version(&base, get).ok().map(|_| base)
+}
+
+/// The scheme first tried on a port with no known web service.
+fn guess_scheme(port: u16) -> &'static str {
+    if matches!(port, 443 | 8443) {
+        "https"
+    } else {
+        "http"
+    }
+}
+
+/// The ports to try on one machine: its web ports (with their scheme), then the
+/// ports the nodes found use, then the ports of the settings; each once.
+pub fn candidate_ports(web: &[(u16, String)], learned: &[u16], configured: &[u16]) -> Vec<(u16, String)> {
+    let mut out: Vec<(u16, String)> = Vec::new();
+    for (port, scheme) in web {
+        if !out.iter().any(|(p, _)| p == port) {
+            out.push((*port, scheme.clone()));
+        }
+    }
+    for port in learned.iter().chain(configured) {
+        if !out.iter().any(|(p, _)| p == port) {
+            out.push((*port, guess_scheme(*port).to_string()));
+        }
+    }
+    out
 }
 
 /// A scanned machine and its web ports: (address, [(port, "http" | "https")]).
@@ -850,6 +882,19 @@ impl Peers {
         }
         out
     }
+
+    /// The ports the nodes found use (most used first), tried on the other machines.
+    pub fn known_ports(&self) -> Vec<u16> {
+        let mut count: HashMap<u16, usize> = HashMap::new();
+        for b in self.nodes.keys().chain(self.mdns.keys()).chain(self.scan.keys()) {
+            if let Some((_, port)) = host_port(b) {
+                *count.entry(port).or_default() += 1;
+            }
+        }
+        let mut out: Vec<(u16, usize)> = count.into_iter().collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        out.into_iter().map(|x| x.0).take(8).collect()
+    }
 }
 
 /// A Node API reader for the local network: short timeouts, no proxy, and
@@ -875,10 +920,10 @@ impl Net {
         Scope::new(&s.ranges, &networks, &super::super::interfaces())
     }
 
-    /// The scanned machines with a web port: (address, [(port, scheme)]).
+    /// The scanned machines that answer, with their web ports: (address, [(port, scheme)]).
     fn web_hosts(&self) -> Vec<WebHost> {
         let st = self.store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        st.addresses.values().map(|a| (a.ip, a.ports.iter().filter_map(|p| p.web.as_ref().map(|w| (p.port, w.scheme.clone()))).collect::<Vec<_>>())).filter(|(_, p)| !p.is_empty()).collect()
+        st.addresses.values().filter(|a| a.up || !a.ports.is_empty()).map(|a| (a.ip, a.ports.iter().filter_map(|p| p.web.as_ref().map(|w| (p.port, w.scheme.clone()))).collect::<Vec<_>>())).collect()
     }
 }
 
@@ -936,7 +981,8 @@ impl Poller {
                 p.ifaces.clone_from(&scope.ifaces);
             }
             let probe = if s.probe_scan && !p.probing {
-                let hosts = net.web_hosts();
+                let learned = p.known_ports();
+                let hosts: Vec<WebHost> = net.web_hosts().into_iter().map(|(ip, web)| (ip, candidate_ports(&web, &learned, &s.node_ports))).collect();
                 let due = due_hosts(&hosts, &p.probed, &p.known_ips(), &scope, now, PROBE_HOSTS);
                 for (ip, _) in &due {
                     p.probed.insert(*ip, now);
