@@ -1195,6 +1195,11 @@ tr.open .exp svg { transform: rotate(180deg); }
 .nmos-found > svg { color: var(--pvw); flex: none; }
 .nmos-found .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nmos-found .btn { flex: none; }
+.nmos-ranges { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
+.nmos-ranges .rcpts { flex: 1; min-width: 0; }
+.nmos-ranges > .dd-btn { flex: none; width: auto; height: var(--h-control); }
+.set-body > .segmented.nmos-source { align-self: flex-start; }
+.badge.nmos-by { margin-right: 4px; }
 .alive { display: inline-flex; align-items: center; gap: 6px; font: 11.5px var(--mono); }
 .alive i { width: 7px; height: 7px; border-radius: 50%; background: var(--pvw); box-shadow: 0 0 6px var(--pvw); }
 .alive.off i { background: var(--text-3); box-shadow: none; }

@@ -113,7 +113,7 @@ fn addresses_and_settings() {
     for bad in ["10.1.1.20:8010", "ftp://x", "http://", "http://a b", "http://x/?q"] {
         assert!(query_base(bad, "v1.3").is_err(), "{bad}");
     }
-    let mut s = Settings { enabled: true, url: " http://10.1.1.20:8010/ ".into(), ..Settings::default() };
+    let mut s = Settings { enabled: true, url: " http://10.1.1.20:8010/ ".into(), source: "registry".into(), ..Settings::default() };
     s.check().unwrap();
     assert_eq!(s.url, "http://10.1.1.20:8010");
     assert_eq!(s.base().as_deref(), Some(BASE));
@@ -122,7 +122,7 @@ fn addresses_and_settings() {
     assert_eq!(s.interval(), Duration::from_secs(60));
     s.version = "v1.1".into();
     assert_eq!(s.check().unwrap_err(), "the nmos version is v1.2 or v1.3");
-    let mut s = Settings { enabled: true, ..Settings::default() };
+    let mut s = Settings { enabled: true, source: "registry".into(), ..Settings::default() };
     assert_eq!(s.check().unwrap_err(), "the registry address cannot be empty");
     s.enabled = false;
     assert!(s.check().is_ok() && s.base().is_none());
@@ -132,8 +132,29 @@ fn addresses_and_settings() {
     assert_eq!(host_port("http://[fd00::1]:8010"), Some(("fd00::1".into(), 8010)));
     assert_eq!(host_port("http://reg:port/"), None);
     // Saved settings without the newer fields.
-    let s: Settings = serde_json::from_str(r#"{"enabled": true, "url": "http://r:80"}"#).unwrap();
+    let mut s: Settings = serde_json::from_str(r#"{"enabled": true, "url": "http://r:80"}"#).unwrap();
     assert_eq!((s.version.as_str(), s.refresh.as_str()), ("v1.3", "live"));
+    // … a registry set: it stays the source; none: the nodes, the scan probe on.
+    s.migrate();
+    assert_eq!(s.source, "registry");
+    let mut s: Settings = serde_json::from_str(r#"{"enabled": false, "url": ""}"#).unwrap();
+    s.migrate();
+    assert_eq!(s.source, "nodes");
+    assert!(s.probe_scan && s.node_urls.is_empty() && s.ranges.is_empty());
+    // Nodes mode: no registry address needed, no Query API read; node addresses and ranges checked.
+    let mut s = Settings { enabled: true, source: "nodes".into(), node_urls: vec!["10.1.1.7:8080".into(), " http://10.1.1.7:8080/ ".into(), "".into(), "https://GW.lan/x-nmos/node/v1.3".into()], ranges: vec!["10.99.0.0/16".into(), " 10.10.1.10-10.10.1.50 ".into()], ..Settings::default() };
+    s.check().unwrap();
+    assert!(s.base().is_none());
+    assert_eq!(s.node_urls, vec!["http://10.1.1.7:8080", "https://gw.lan"]);
+    assert_eq!(s.ranges, vec!["10.99.0.0/16", "10.10.1.10-10.10.1.50"]);
+    s.node_urls = vec!["ftp://x".into()];
+    assert_eq!(s.check().unwrap_err(), "the node address is written http://host:port");
+    s.node_urls.clear();
+    s.ranges = vec!["10.1.1.0/33".into()];
+    assert!(s.check().unwrap_err().starts_with("nmos range 10.1.1.0/33"));
+    s.ranges.clear();
+    s.source = "mdns".into();
+    assert_eq!(s.check().unwrap_err(), "the nmos source is registry or nodes");
 }
 
 #[test]

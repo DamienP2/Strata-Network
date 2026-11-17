@@ -54,13 +54,13 @@ fn node(id: &str, label: &str, api: &str, port_mac: &str) -> Node {
 }
 
 fn snd(id: &str, label: &str, active: Option<bool>, sdp: &str, reg: &mut Registry) {
-    reg.senders.push(Sender { id: id.into(), version: "1:0".into(), label: label.into(), flow_id: Some(format!("f-{id}")), device_id: "dA".into(), transport: "urn:x-nmos:transport:rtp.mcast".into(), manifest_href: Some(format!("http://10.1.1.7/{id}.sdp")), active });
-    reg.flows.push(Essence { id: format!("f-{id}"), format: if sdp.contains("m=audio") { "urn:x-nmos:format:audio".into() } else { "urn:x-nmos:format:video".into() }, source_id: None });
+    reg.senders.push(Sender { id: id.into(), version: "1:0".into(), label: label.into(), flow_id: Some(format!("f-{id}")), device_id: "dA".into(), transport: "urn:x-nmos:transport:rtp.mcast".into(), manifest_href: Some(format!("http://10.1.1.7/{id}.sdp")), active, ..Sender::default() });
+    reg.flows.push(Essence { id: format!("f-{id}"), format: if sdp.contains("m=audio") { "urn:x-nmos:format:audio".into() } else { "urn:x-nmos:format:video".into() }, source_id: None, ..Essence::default() });
     reg.sdp.insert(id.into(), SdpEntry { version: "1:0".into(), href: String::new(), at: 0, text: Some(sdp.into()), medias: parse_sdp(sdp), error: None });
 }
 
 fn rcv(id: &str, label: &str, sender: Option<&str>, active: Option<bool>) -> NReceiver {
-    NReceiver { id: id.into(), version: "1:0".into(), label: label.into(), device_id: "dB".into(), format: "urn:x-nmos:format:video".into(), sender_id: sender.map(str::to_string), active }
+    NReceiver { id: id.into(), version: "1:0".into(), label: label.into(), device_id: "dB".into(), format: "urn:x-nmos:format:video".into(), sender_id: sender.map(str::to_string), active, ..NReceiver::default() }
 }
 
 /// cobalt-bidi4-01 (10.1.1.7) on SW2110-01 Eth1/12 (LLDP by address), multiviewer-01
@@ -76,8 +76,8 @@ fn registry(s3_active: bool) -> Registry {
         Node { tags: vec![], interfaces: vec![Iface { name: "eth0".into(), chassis_id: None, port_id: None, attached: Some(("70-69-5a-ee-6f-79".into(), "Ethernet1/5".into())) }], ..node("nD", "gw-05", "10.1.1.50", "00-00-00-00-00-00") },
     ];
     reg.devices = vec![
-        Device { id: "dA".into(), version: "1:0".into(), label: "BIDI4".into(), node_id: "nA".into(), tags: vec![] },
-        Device { id: "dB".into(), version: "1:0".into(), label: "MV".into(), node_id: "nB".into(), tags: vec![] },
+        Device { id: "dA".into(), version: "1:0".into(), label: "BIDI4".into(), node_id: "nA".into(), tags: vec![], ..Device::default() },
+        Device { id: "dB".into(), version: "1:0".into(), label: "MV".into(), node_id: "nB".into(), tags: vec![], ..Device::default() },
     ];
     snd("s1", "BIDI4-01 · SDI 1 → IP", Some(true), DUP, &mut reg);
     snd("s2", "BIDI4-01 · SDI 1 audio", Some(true), &audio_sdp(), &mut reg);
@@ -226,4 +226,84 @@ fn nodes_are_placed() {
     let d = by("nD");
     assert_eq!(d.at.first().map(|x| (x.switch_name.as_str(), x.port.as_str())), Some(("SW2110-01", "Eth1/5")));
     assert!(nodes(&Input::default()).is_empty());
+}
+
+/// gw-05 (read directly): its Node API on the management network (10.99.0.7,
+/// SW2110-02 Eth1/5), its media on 10.10.1.70 (SW2110-01 Eth1/20); one sender
+/// (IS-05 legs, no SDP text), one receiver set by IS-05 to s3's group without
+/// `sender_id`, receiving on its media interface.
+fn oob_ib() -> Input {
+    let mut reg = registry(true);
+    reg.nodes.push(Node { id: "nE".into(), label: "gw-05".into(), ips: vec![ip("10.99.0.7")], ..Node::default() });
+    reg.devices.push(Device { id: "dE".into(), node_id: "nE".into(), ..Device::default() });
+    reg.senders.push(Sender { id: "s5".into(), label: "GW-05 · out 1".into(), device_id: "dE".into(), flow_id: Some("f-s5".into()), active: Some(true), ..Sender::default() });
+    reg.flows.push(Essence { id: "f-s5".into(), format: "urn:x-nmos:format:video".into(), ..Essence::default() });
+    let leg = strata_net::mcast::Sdp { group: Some(ip("239.150.1.1")), port: 5004, source: Some(ip("10.10.1.70")), kind: Some(Kind::Video), ..Default::default() };
+    reg.sdp.insert("s5".into(), SdpEntry { medias: vec![leg], ..SdpEntry::default() });
+    reg.receivers.push(NReceiver {
+        id: "r5".into(),
+        label: "GW-05 in 1".into(),
+        device_id: "dE".into(),
+        legs: vec![crate::net::nmos::RxLeg { group: ip("239.120.1.2"), source: None, port: Some(5004) }],
+        ifaces: vec![ip("10.10.1.70")],
+        ..NReceiver::default()
+    });
+    let mut inp = input(reg);
+    inp.addresses.insert(ip("10.99.0.7"), Addr { name: Some("gw-05".into()), mac: None, switch: Some(crate::net::model::PortRef { id: "s2".into(), port: 5 }) });
+    inp.addresses.insert(ip("10.10.1.70"), Addr { name: Some("gw-05-media".into()), mac: None, switch: Some(crate::net::model::PortRef { id: "s1".into(), port: 20 }) });
+    inp
+}
+
+#[test]
+fn one_device_with_management_and_media_addresses() {
+    let inp = oob_ib();
+    let list = nodes(&inp);
+    let e = list.iter().find(|n| n.id == "nE").unwrap();
+    // One node: the management address, the media one apart, in the inventory once.
+    assert_eq!((e.ip, e.media.clone(), e.inventory, e.name.as_deref()), (Some(ip("10.99.0.7")), vec![ip("10.10.1.70")], true, Some("gw-05")));
+    // Its port: the media network's first, then the management one.
+    assert_eq!(e.at.iter().map(|a| (a.switch_name.as_str(), a.port.as_str())).collect::<Vec<_>>(), vec![("SW2110-01", "Eth1/20"), ("SW2110-02", "Eth1/5")]);
+    assert_eq!((e.found, e.found_by.clone()), (FoundBy::Registry, vec![FoundBy::Registry]));
+    let v = build(&inp);
+    // Its flow: the emitter is the media address, on the media port.
+    let f = flow(&v, "239.150.1.1");
+    let em = f.emitter.as_ref().unwrap();
+    assert_eq!((em.ip, em.at.as_ref().map(|a| a.port.as_str())), (ip("10.10.1.70"), Some("Eth1/20")));
+    // A second media address not placed (another leg's network): not guessed on the first one's port.
+    let mut inp = oob_ib();
+    let mut reg = (**inp.nmos.as_ref().unwrap()).clone();
+    let blue = strata_net::mcast::Sdp { group: Some(ip("239.160.1.1")), port: 5004, source: Some(ip("10.20.1.70")), kind: Some(Kind::Video), ..Default::default() };
+    reg.sdp.get_mut("s5").unwrap().medias.push(blue);
+    inp.nmos = Some(Arc::new(reg));
+    let v2 = build(&inp);
+    let em2 = flow(&v2, "239.160.1.1").emitter.as_ref().unwrap();
+    assert_eq!((em2.ip, em2.at.is_none()), (ip("10.20.1.70"), true));
+    // The receiver set by IS-05 to 239.120.1.2 (no sender_id) is a subscriber, on its media port.
+    let g = flow(&v, "239.120.1.2");
+    let s = g.subscribers.iter().find(|s| s.id == "r5").unwrap();
+    assert_eq!((s.node.as_deref(), s.at.as_ref().map(|a| a.port.as_str())), (Some("gw-05"), Some("Eth1/20")));
+    assert_eq!(g.receiver_count, 2);
+    // Without the management address in the inventory, the media one still makes it known.
+    let mut inp = oob_ib();
+    inp.addresses.remove(&ip("10.99.0.7"));
+    let list = nodes(&inp);
+    assert!(list.iter().find(|n| n.id == "nE").unwrap().inventory);
+}
+
+#[test]
+fn unreachable_node_senders_are_idle_not_gone() {
+    let inp = oob_ib();
+    let on = build(&inp);
+    assert!(flow(&on, "239.150.1.1").live);
+    let mut reg = (**inp.nmos.as_ref().unwrap()).clone();
+    for s in reg.senders.iter_mut().filter(|s| s.device_id == "dE") {
+        s.stale = true;
+    }
+    let off = build(&Input { nmos: Some(Arc::new(reg)), ..oob_ib() });
+    let f = flow(&off, "239.150.1.1");
+    assert_eq!((f.live, f.idle, f.nmos.as_ref().map(|n| n.unreachable)), (false, true, Some(true)));
+    let mut w = Watch::default();
+    assert!(evaluate(&mut w, &on, 1, 1_000_000).0.is_empty());
+    let (alerts, _) = evaluate(&mut w, &off, 1, 1_005_000);
+    assert!(alerts.iter().all(|a| a.0 != "streamGone"), "{alerts:?}");
 }

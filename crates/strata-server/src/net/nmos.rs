@@ -1,9 +1,11 @@
-//! NMOS registry (AMWA IS-04 Query API), read only. The registry's nodes,
-//! devices, sources, flows, senders and receivers are read with HTTP GET (paged)
-//! every 5 s ("live") or every 60 s, and each sender's SDP (`manifest_href`)
-//! with GET when the sender's version changes. Nothing is ever sent to the
-//! registry or to a node besides those GETs: no registration, no IS-05
-//! connection, no Query API subscription (the "live" mode is polling).
+//! NMOS, read only: a registry (AMWA IS-04 Query API) or, without one, the Node
+//! APIs of the nodes themselves (`peers`: found by mDNS, among the scanned
+//! machines, or typed). The nodes, devices, sources, flows, senders and receivers
+//! are read with HTTP GET every 5 s ("live") or every 60 s, and each sender's SDP
+//! (`manifest_href`) with GET when the sender's version changes. Nothing is ever
+//! sent to the registry or to a node besides those GETs: no registration, no
+//! IS-05 connection change (only `GET …/active` of the Connection API, nodes
+//! mode), no Query API subscription (the "live" mode is polling).
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -17,6 +19,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use strata_net::mcast::{parse_sdp, Kind, Sdp};
+use strata_net::mformat::Format;
 use strata_net::mdns::Service;
 use tokio::sync::Notify;
 
@@ -47,7 +50,13 @@ const BROWSE_AGE_MS: i64 = 60_000;
 /// The mDNS kind of `_nmos-query._tcp` (`strata_net::mdns::TYPES`).
 pub const QUERY_KIND: &str = "NMOS Query";
 
+pub mod peers;
+
 // ── Settings ──
+
+fn default_true() -> bool {
+    true
+}
 
 fn default_version() -> String {
     "v1.3".into()
@@ -71,18 +80,77 @@ pub struct Settings {
     /// "live" (read every 5 s) or "60s".
     #[serde(default = "default_refresh")]
     pub refresh: String,
+    /// "registry" (the Query API at `url`) or "nodes" (the Node APIs, no registry).
+    /// Missing (settings saved before): "registry" when `url` is set, else "nodes".
+    #[serde(default)]
+    pub source: String,
+    /// Nodes mode: Node APIs typed by hand (`http://10.1.1.7:8080`), for the
+    /// nodes mDNS does not reach (another VLAN).
+    #[serde(default)]
+    pub node_urls: Vec<String>,
+    /// Nodes mode: also looks for Node APIs on the web ports of the scanned machines.
+    #[serde(default = "default_true")]
+    pub probe_scan: bool,
+    /// Nodes mode: the ranges searched (CIDR `10.1.1.0/24` or `10.1.1.10-10.1.1.50`):
+    /// mDNS on each local interface inside one, the scan probe of the machines
+    /// inside. Empty: the scan networks a local interface is in (else everywhere).
+    #[serde(default)]
+    pub ranges: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { enabled: false, url: String::new(), version: default_version(), refresh: default_refresh() }
+        Settings { enabled: false, url: String::new(), version: default_version(), refresh: default_refresh(), source: "nodes".into(), node_urls: Vec::new(), probe_scan: true, ranges: Vec::new() }
     }
 }
 
+/// Node addresses typed by hand, at most.
+pub const MAX_NODE_URLS: usize = 100;
+
 impl Settings {
+    /// The source of settings saved before it existed.
+    pub fn migrate(&mut self) {
+        if self.source.is_empty() {
+            self.source = if self.url.trim().is_empty() { "nodes" } else { "registry" }.into();
+        }
+    }
+
+    pub fn nodes_mode(&self) -> bool {
+        self.source == "nodes"
+    }
+
     /// Trims and checks what was sent.
     pub fn check(&mut self) -> Result<(), String> {
+        self.migrate();
         self.url = self.url.trim().trim_end_matches('/').to_string();
+        if !matches!(self.source.as_str(), "registry" | "nodes") {
+            return Err("the nmos source is registry or nodes".into());
+        }
+        let mut urls: Vec<String> = Vec::new();
+        for u in &self.node_urls {
+            if u.trim().is_empty() {
+                continue;
+            }
+            let base = peers::node_base(u)?;
+            if !urls.contains(&base) {
+                urls.push(base);
+            }
+        }
+        if urls.len() > MAX_NODE_URLS {
+            return Err(format!("at most {MAX_NODE_URLS} node addresses"));
+        }
+        self.node_urls = urls;
+        let mut ranges: Vec<String> = Vec::new();
+        for r in self.ranges.iter().map(|r| r.trim()).filter(|r| !r.is_empty()) {
+            peers::Span::parse(r).map_err(|e| format!("nmos range {r}: {e}"))?;
+            if !ranges.iter().any(|x| x == r) {
+                ranges.push(r.to_string());
+            }
+        }
+        if ranges.len() > MAX_NODE_URLS {
+            return Err(format!("at most {MAX_NODE_URLS} nmos ranges"));
+        }
+        self.ranges = ranges;
         if !matches!(self.version.as_str(), "v1.2" | "v1.3") {
             return Err("the nmos version is v1.2 or v1.3".into());
         }
@@ -90,14 +158,14 @@ impl Settings {
             return Err("the nmos refresh is live or 60s".into());
         }
         if self.url.is_empty() {
-            return if self.enabled { Err("the registry address cannot be empty".into()) } else { Ok(()) };
+            return if self.enabled && !self.nodes_mode() { Err("the registry address cannot be empty".into()) } else { Ok(()) };
         }
         query_base(&self.url, &self.version).map(|_| ())
     }
 
-    /// The Query API read, when turned on.
+    /// The Query API read, when turned on in registry mode.
     pub fn base(&self) -> Option<String> {
-        if !self.enabled {
+        if !self.enabled || self.nodes_mode() {
             return None;
         }
         query_base(&self.url, &self.version).ok()
@@ -109,7 +177,12 @@ impl Settings {
 
     /// What the history says of these settings.
     pub fn summary(&self) -> String {
-        format!("{} · {} · {} · {}", if self.enabled { "on" } else { "off" }, if self.url.is_empty() { "no address" } else { &self.url }, self.version, self.refresh)
+        let on = if self.enabled { "on" } else { "off" };
+        if self.nodes_mode() {
+            let urls = if self.node_urls.is_empty() { "no address".to_string() } else { self.node_urls.join(", ") };
+            return format!("{on} · nodes · {urls} · scan {} · {}", if self.probe_scan { "on" } else { "off" }, self.refresh);
+        }
+        format!("{on} · {} · {} · {}", if self.url.is_empty() { "no address" } else { &self.url }, self.version, self.refresh)
     }
 }
 
@@ -131,7 +204,7 @@ pub fn query_base(url: &str, version: &str) -> Result<String, String> {
 }
 
 /// `host:port` of a URL (port 80 / 443 when not written).
-fn host_port(url: &str) -> Option<(String, u16)> {
+pub(crate) fn host_port(url: &str) -> Option<(String, u16)> {
     let (scheme, rest) = url.split_once("://")?;
     let auth = rest.split(['/', '?', '#']).next()?;
     let auth = auth.rsplit('@').next()?;
@@ -180,6 +253,9 @@ pub struct Device {
     pub label: String,
     pub node_id: String,
     pub tags: Vec<(String, Vec<String>)>,
+    /// Its IS-05 Connection API (`controls`, `urn:x-nmos:control:sr-ctrl/…`):
+    /// `http://10.1.1.7:8080/x-nmos/connection/v1.1` (read with GET only).
+    pub conn: Option<String>,
 }
 
 /// A source or a flow: its format ("urn:x-nmos:format:video").
@@ -189,6 +265,9 @@ pub struct Essence {
     pub format: String,
     /// Flows: their source.
     pub source_id: Option<String>,
+    /// Flows: what their IS-04 description says of the media (size, rate, sampling…),
+    /// for the senders known without SDP. Sources: `channels` of an audio source.
+    pub media: Option<Format>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -202,6 +281,8 @@ pub struct Sender {
     pub manifest_href: Option<String>,
     /// `subscription.active` (v1.2+): the sender is enabled; `None` before v1.2.
     pub active: Option<bool>,
+    /// Nodes mode: its node no longer answers (past the grace period): kept, not live.
+    pub stale: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -215,12 +296,33 @@ pub struct Receiver {
     pub sender_id: Option<String>,
     /// `subscription.active` (v1.2+); `None` before v1.2.
     pub active: Option<bool>,
+    /// Nodes mode: what its IS-05 `active` parameters say it receives (one leg,
+    /// two for ST 2022-7), when `master_enable` is not false.
+    pub legs: Vec<RxLeg>,
+    /// Nodes mode: IS-05 `interface_ip` of its legs (the node's media addresses).
+    pub ifaces: Vec<Ipv4Addr>,
+}
+
+/// A multicast group a receiver is set to (IS-05 `transport_params`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RxLeg {
+    pub group: Ipv4Addr,
+    /// `source_ip` (SSM).
+    pub source: Option<Ipv4Addr>,
+    /// `destination_port`.
+    pub port: Option<u16>,
 }
 
 impl Receiver {
     /// Set to receive a sender, and not turned off.
     pub fn subscribed(&self) -> Option<&str> {
         self.sender_id.as_deref().filter(|_| self.active != Some(false))
+    }
+
+    /// Set (IS-05) to receive this group, port and source (a port or source not
+    /// known on either side matches).
+    pub fn receives(&self, group: Ipv4Addr, port: u16, source: Option<Ipv4Addr>) -> bool {
+        self.legs.iter().any(|l| l.group == group && (port == 0 || l.port.is_none_or(|p| p == port)) && (source.is_none() || l.source.is_none() || l.source == source))
     }
 }
 
@@ -254,6 +356,10 @@ pub struct Registry {
     pub seen: HashMap<String, i64>,
     /// Nodes no longer in the registry, kept [`NODE_KEPT_MS`].
     pub gone: Vec<Node>,
+    /// Nodes mode: how each node (by id) is read; and the Node APIs found that
+    /// never answered (no node id).
+    pub direct: HashMap<String, peers::PeerInfo>,
+    pub unread: Vec<peers::PeerInfo>,
 }
 
 impl Registry {
@@ -281,7 +387,7 @@ impl Registry {
     }
 
     pub fn subscribed(&self) -> usize {
-        self.receivers.iter().filter(|r| r.subscribed().is_some()).count()
+        self.receivers.iter().filter(|r| r.subscribed().is_some() || !r.legs.is_empty()).count()
     }
 
     /// A fingerprint of what the flows take from the registry (changes when they would).
@@ -296,8 +402,17 @@ impl Registry {
         for s in &self.senders {
             (&s.id, &s.version, s.active, self.medias(&s.id).len()).hash(&mut h);
         }
+        for s in &self.senders {
+            s.stale.hash(&mut h);
+            for m in self.medias(&s.id) {
+                (m.group, m.port, m.source).hash(&mut h);
+            }
+        }
         for r in &self.receivers {
             (&r.id, &r.version, &r.sender_id, r.active).hash(&mut h);
+            for l in &r.legs {
+                (l.group, l.port, l.source).hash(&mut h);
+            }
         }
         h.finish()
     }
@@ -395,13 +510,20 @@ impl Node {
 
 impl Device {
     fn parse(v: &Value) -> Option<Device> {
-        Some(Device { id: text(v, "id")?, version: text(v, "version").unwrap_or_default(), label: text(v, "label").unwrap_or_default(), node_id: text(v, "node_id").unwrap_or_default(), tags: tags(v) })
+        Some(Device {
+            id: text(v, "id")?,
+            version: text(v, "version").unwrap_or_default(),
+            label: text(v, "label").unwrap_or_default(),
+            node_id: text(v, "node_id").unwrap_or_default(),
+            tags: tags(v),
+            conn: peers::connection_api(v),
+        })
     }
 }
 
 impl Essence {
     fn parse(v: &Value) -> Option<Essence> {
-        Some(Essence { id: text(v, "id")?, format: text(v, "format").unwrap_or_default(), source_id: text(v, "source_id") })
+        Some(Essence { id: text(v, "id")?, format: text(v, "format").unwrap_or_default(), source_id: text(v, "source_id"), media: peers::media_of(v) })
     }
 }
 
@@ -417,6 +539,7 @@ impl Sender {
             transport: text(v, "transport").unwrap_or_default(),
             manifest_href: text(v, "manifest_href"),
             active,
+            stale: false,
         })
     }
 }
@@ -432,6 +555,8 @@ impl Receiver {
             format: text(v, "format").unwrap_or_default(),
             sender_id,
             active,
+            legs: Vec::new(),
+            ifaces: Vec::new(),
         })
     }
 }
@@ -601,6 +726,11 @@ fn read_sdp(get: &Get, href: &str, version: &str, now: i64) -> SdpEntry {
 /// The SDP of every sender: kept from `prev` while the sender's version and
 /// `manifest_href` stay the same, else read again (at most [`SDP_WORKERS`] at once).
 pub fn read_sdps(senders: &[Sender], prev: Option<&HashMap<String, SdpEntry>>, get: &Get, now: i64) -> HashMap<String, SdpEntry> {
+    read_sdps_with(senders, prev, get, now, SDP_WORKERS)
+}
+
+/// [`read_sdps`] with `workers` reads at once.
+pub fn read_sdps_with(senders: &[Sender], prev: Option<&HashMap<String, SdpEntry>>, get: &Get, now: i64, workers: usize) -> HashMap<String, SdpEntry> {
     let mut out = HashMap::new();
     let mut todo: Vec<(String, String, String)> = Vec::new();
     for s in senders {
@@ -615,7 +745,7 @@ pub fn read_sdps(senders: &[Sender], prev: Option<&HashMap<String, SdpEntry>>, g
     if todo.is_empty() {
         return out;
     }
-    let workers = SDP_WORKERS.min(todo.len());
+    let workers = workers.clamp(1, todo.len());
     let queue = Mutex::new(todo);
     let done: Mutex<Vec<(String, SdpEntry)>> = Mutex::new(Vec::new());
     std::thread::scope(|sc| {
@@ -731,18 +861,24 @@ pub struct Nmos {
     pub settings: Mutex<Settings>,
     reading: Mutex<Reading>,
     wake: Notify,
+    /// Nodes mode: discovery and polling.
+    pub peers: Mutex<peers::Peers>,
 }
 
 impl Nmos {
     pub fn load(dir: &std::path::Path) -> Nmos {
         let settings = match read_json::<Settings>(&dir.join(FILE)) {
-            Ok(v) => v.unwrap_or_default(),
+            Ok(Some(mut v)) => {
+                v.migrate();
+                v
+            }
+            Ok(None) => Settings::default(),
             Err(e) => {
                 tracing::error!("cannot read {FILE}: {e}; nmos off");
                 Settings::default()
             }
         };
-        Nmos { settings: Mutex::new(settings), reading: Mutex::default(), wake: Notify::new() }
+        Nmos { settings: Mutex::new(settings), reading: Mutex::default(), wake: Notify::new(), peers: Mutex::default() }
     }
 
     pub fn settings(&self) -> Settings {
@@ -815,8 +951,14 @@ fn new_generation() {
 pub fn spawn(net: Arc<Net>) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(2)).await;
+        let mut poller = peers::Poller::default();
         loop {
             let s = net.nmos.settings();
+            if s.enabled && s.nodes_mode() {
+                poller.tick(&net, &s).await;
+                continue;
+            }
+            poller.stop(&net);
             let Some(base) = s.base() else {
                 if net.nmos.clear() {
                     net.changed("nmos");
@@ -855,6 +997,8 @@ pub fn spawn(net: Arc<Net>) {
 #[serde(rename_all = "camelCase")]
 pub struct StatusView {
     pub enabled: bool,
+    /// "registry" or "nodes".
+    pub source: String,
     /// The Query API read ('' when off or not set).
     pub url: String,
     pub version: String,
@@ -880,6 +1024,17 @@ pub struct StatusView {
     pub unknown: usize,
     /// Senders whose SDP could not be read (not in the flows).
     pub without_sdp: usize,
+    /// Nodes mode: Node APIs polled; answering ones; the others (not answering,
+    /// or never answered); found by mDNS, the scan, typed (one may be several);
+    /// the Node API versions read; the local interfaces mDNS asks on.
+    pub polled: usize,
+    pub answering: usize,
+    pub unreachable: usize,
+    pub mdns: usize,
+    pub scan: usize,
+    pub manual: usize,
+    pub apis: Vec<String>,
+    pub ifaces: Vec<Ipv4Addr>,
 }
 
 impl Net {
@@ -892,8 +1047,10 @@ impl Net {
         };
         let list = found(&self.services.lock().unwrap_or_else(std::sync::PoisonError::into_inner).1);
         let mine = found_for(&list, &base);
+        let nodes_mode = s.nodes_mode();
         let mut v = StatusView {
             enabled: s.enabled,
+            source: s.source.clone(),
             registry: (!base.is_empty()).then(|| mine.map(|f| f.name.clone()).or_else(|| host_port(&base).map(|(h, _)| h))).flatten(),
             backup: (!base.is_empty()).then(|| list.iter().find(|f| Some(*f) != mine).map(|f| f.name.clone())).flatten(),
             url: base,
@@ -914,6 +1071,25 @@ impl Net {
             v.without_sdp = reg.senders.iter().filter(|x| reg.medias(&x.id).is_empty()).count();
             let inp = self.flows_input();
             v.unknown = super::mflows::registry::nodes(&inp).iter().filter(|n| n.present && !n.inventory).count();
+        }
+        if nodes_mode {
+            let p = self.nmos.peers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            v.polled = p.nodes.len();
+            v.answering = p.nodes.values().filter(|x| x.data.is_some() && x.misses == 0).count();
+            v.unreachable = v.polled - v.answering;
+            let by = |f: peers::FoundBy| p.nodes.values().filter(|x| x.info.found.contains(&f)).count();
+            v.mdns = by(peers::FoundBy::Mdns);
+            v.scan = by(peers::FoundBy::Scan);
+            v.manual = by(peers::FoundBy::Manual);
+            let mut apis: Vec<String> = p.nodes.values().filter_map(|x| x.info.api.clone()).collect();
+            apis.sort();
+            apis.dedup();
+            v.apis = apis;
+            v.ifaces.clone_from(&p.ifaces);
+            v.at = p.nodes.values().map(|x| x.info.last_ok).max().unwrap_or(0);
+            v.tried = p.nodes.values().map(|x| x.info.tried).max().unwrap_or(v.tried);
+            // An error only when no node answers.
+            v.error = if v.answering == 0 { p.nodes.values().find_map(|x| x.info.error.clone()) } else { None };
         }
         v
     }
@@ -964,17 +1140,68 @@ async fn put_settings(State(s): State<Shared>, me: Session, Json(mut b): Json<Se
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TestBody {
     #[serde(default)]
     url: Option<String>,
     #[serde(default)]
     version: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    node_urls: Option<Vec<String>>,
+    #[serde(default)]
+    ranges: Option<Vec<String>>,
+}
+
+/// Nodes mode test: asks mDNS on the interfaces of the ranges, then reads each
+/// Node API heard and each one typed (version, `self`, senders, receivers).
+async fn test_nodes(s: &Shared, b: TestBody) -> ApiResult<Json<Value>> {
+    let mut set = s.net.nmos.settings();
+    set.source = "nodes".into();
+    if let Some(u) = b.node_urls {
+        set.node_urls = u;
+    }
+    if let Some(r) = b.ranges {
+        set.ranges = r;
+    }
+    set.check().map_err(bad)?;
+    let started = Instant::now();
+    let scope = s.net.nmos_scope(&set);
+    let heard = peers::heard(&peers::browse_nodes(&scope.ifaces).await);
+    {
+        let now = now_ms();
+        let mut p = s.net.nmos.peers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (b, name) in &heard {
+            p.mdns.insert(b.clone(), peers::Heard { name: name.clone(), seen: now });
+        }
+    }
+    let mut jobs: Vec<(String, Vec<peers::FoundBy>)> = heard.iter().map(|(b, _)| (b.clone(), vec![peers::FoundBy::Mdns])).collect();
+    for u in &set.node_urls {
+        match jobs.iter_mut().find(|j| &j.0 == u) {
+            Some(j) => j.1.push(peers::FoundBy::Manual),
+            None => jobs.push((u.clone(), vec![peers::FoundBy::Manual])),
+        }
+    }
+    let mut nodes = tokio::task::spawn_blocking(move || {
+        let agent = peers::node_agent(Duration::from_secs(2), Duration::from_secs(5));
+        let get = |u: &str, limit: u64| http_get(&agent, u, limit);
+        peers::par(jobs, peers::POLL_WORKERS, &|(base, found): (String, Vec<peers::FoundBy>)| peers::check_node(&base, found, &get))
+    })
+    .await
+    .unwrap_or_default();
+    nodes.sort_by(|a, b| a.url.cmp(&b.url));
+    s.net.nmos.wake();
+    Ok(Json(json!({ "ifaces": scope.ifaces, "mdns": heard.len(), "nodes": nodes, "ms": started.elapsed().as_millis() as u64 })))
 }
 
 /// Reads the registry once (the address sent, else the saved one): counts, or why not.
 async fn test_route(State(s): State<Shared>, me: Session, Json(b): Json<TestBody>) -> ApiResult<Json<Value>> {
     require(me.user.is_admin())?;
     let saved = s.net.nmos.settings();
+    if b.source.as_deref().unwrap_or(&saved.source) == "nodes" {
+        return test_nodes(&s, b).await;
+    }
     let url = b.url.unwrap_or(saved.url);
     let version = b.version.unwrap_or(saved.version);
     if !matches!(version.as_str(), "v1.2" | "v1.3") {

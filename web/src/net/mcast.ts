@@ -113,7 +113,7 @@ export interface Flow {
   pairBy?: 'sdp' | 'name';
   leg?: 'a' | 'b';
   origins: ('nmos' | 'sap' | 'igmp')[];
-  nmos?: { senderId: string; sender: string; nodeId?: string; node?: string; inventory: boolean; active?: boolean };
+  nmos?: { senderId: string; sender: string; nodeId?: string; node?: string; inventory: boolean; active?: boolean; unreachable?: boolean };
   idle?: boolean;
   subscribers?: Subscriber[];
 }

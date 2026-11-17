@@ -160,7 +160,7 @@ export function Multicast() {
             <span className="grow">{t('Origin')}</span>
           </div>
           {ORIGINS.map((o) =>
-            nav(`origin:${o}`, <span className={`srcb ${o}`}>{originLabel(o)}</span>, o === 'nmos' ? t('Registry') : o === 'sap' ? t('Announcements') : t('Switch tables'), count((f) => f.origins.includes(o))),
+            nav(`origin:${o}`, <span className={`srcb ${o}`}>{originLabel(o)}</span>, o === 'nmos' ? (nmos?.source === 'nodes' ? t('Nodes') : t('Registry')) : o === 'sap' ? t('Announcements') : t('Switch tables'), count((f) => f.origins.includes(o))),
           )}
         </div>
         {vlanIds.length > 0 && (
@@ -413,13 +413,21 @@ function Problems({ data, vlans, onShow }: { data: Flows; vlans: Vlan[] | null; 
   );
 }
 
-/** Le registre NMOS lu : nom, émetteurs, récepteurs abonnés, rythme (ou l'erreur). */
+/** Le registre NMOS lu (ou les nœuds lus directement) : nom, émetteurs, récepteurs abonnés, rythme (ou l'erreur). */
 function RegistryBar({ s }: { s: NmosStatus }) {
   return (
     <div className="info-bar">
       <Radio size={16} />
       <span className="grow">
-        {t('NMOS registry')} <b>{s.registry ?? s.url}</b>
+        {s.source === 'nodes' ? (
+          <>
+            {t('NMOS')} · <b>{tn(s.answering, '{n} node read directly', '{n} nodes read directly')}</b>
+          </>
+        ) : (
+          <>
+            {t('NMOS registry')} <b>{s.registry ?? s.url}</b>
+          </>
+        )}
         {s.at > 0 && ` · ${tn(s.senders, '{n} sender', '{n} senders')} · ${tn(s.subscribed, '{n} subscribed receiver', '{n} subscribed receivers')}`}
         {' · '}
         {s.error ? <span className="warn-t">{errorText(s.error)}</span> : s.refresh === 'live' ? t('read live') : t('read every 60 s')}

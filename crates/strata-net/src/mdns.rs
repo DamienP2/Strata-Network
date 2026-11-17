@@ -100,9 +100,12 @@ fn collect(msg: &[u8], r: &mut Records) -> Option<()> {
     Some(())
 }
 
-fn services(r: &Records) -> Vec<Service> {
+fn services(r: &Records, only: &[&str]) -> Vec<Service> {
     let mut out = Vec::new();
     for (ty, instance) in &r.ptr {
+        if !only.iter().any(|t| t.eq_ignore_ascii_case(ty)) {
+            continue;
+        }
         let Some(kind) = TYPES.iter().find(|(t, _)| t.eq_ignore_ascii_case(ty)).map(|(_, k)| *k) else { continue };
         let key = instance.to_ascii_lowercase();
         let (host, port) = r.srv.get(&key).cloned().unwrap_or_default();
@@ -124,23 +127,89 @@ fn services(r: &Records) -> Vec<Service> {
 /// Asks the network of interface `iface` for the known service types and
 /// listens `wait` for answers.
 pub async fn browse(iface: Ipv4Addr, wait: Duration) -> std::io::Result<Vec<Service>> {
+    let types: Vec<&str> = TYPES.iter().map(|(t, _)| *t).collect();
+    browse_types(iface, &types, 2, wait).await
+}
+
+/// A PTR (or A) question; `qu`: the "unicast response" bit (RFC 6762 § 5.4).
+fn question(name: &str, qtype: u16, qu: bool) -> Vec<u8> {
+    let mut q = dns_query(0, name, qtype);
+    if qu {
+        let n = q.len();
+        q[n - 2] |= 0x80;
+    }
+    q
+}
+
+/// A socket on 5353 that has joined 224.0.0.251 on `iface`: it hears the answers
+/// sent to the group (devices that ignore the "legacy unicast" rule) and the
+/// unsolicited announcements. Shared with any other responder of the machine.
+fn group_socket(iface: Ipv4Addr) -> std::io::Result<UdpSocket> {
+    let s = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    s.set_reuse_address(true)?;
+    #[cfg(unix)]
+    s.set_reuse_port(true)?;
+    s.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, 5353)).into())?;
+    s.join_multicast_v4(&GROUP, &iface)?;
+    s.set_multicast_if_v4(&iface)?;
+    s.set_multicast_ttl_v4(255)?;
+    s.set_nonblocking(true)?;
+    UdpSocket::from_std(s.into())
+}
+
+/// Asks for `types` `rounds` times, 1 s apart, in both styles: from a passing port
+/// (answered directly, "legacy unicast") and, when port 5353 can be shared, from
+/// it (QM then QU: answered to the group or directly). Hosts named by a SRV
+/// without their address are asked for it. Listens until `wait` after the last
+/// question. Answers of every round are put together.
+pub async fn browse_types(iface: Ipv4Addr, types: &[&str], rounds: usize, wait: Duration) -> std::io::Result<Vec<Service>> {
     let s = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     s.set_multicast_if_v4(&iface)?;
     s.set_multicast_ttl_v4(255)?;
     s.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)).into())?;
     s.set_nonblocking(true)?;
     let sock = UdpSocket::from_std(s.into())?;
-    // A query from a port other than 5353 gets direct (unicast) answers.
-    for (ty, _) in TYPES {
-        let _ = sock.send_to(&dns_query(0, ty, 12), (GROUP, 5353)).await;
-    }
+    let group = group_socket(iface).ok();
+    let rounds = rounds.max(1);
     let mut r = Records::default();
     let mut buf = vec![0u8; 9000];
-    let deadline = tokio::time::Instant::now() + wait;
-    while let Ok(Ok((n, _))) = tokio::time::timeout_at(deadline, sock.recv_from(&mut buf)).await {
-        collect(&buf[..n], &mut r);
+    let mut buf2 = vec![0u8; 9000];
+    let start = tokio::time::Instant::now();
+    let deadline = start + Duration::from_secs(rounds as u64 - 1) + wait;
+    for round in 0..rounds {
+        let ask = |name: &str, qtype: u16, qu: bool| question(name, qtype, qu);
+        for ty in types {
+            let _ = sock.send_to(&ask(ty, 12, false), (GROUP, 5353)).await;
+            if let Some(g) = &group {
+                let _ = g.send_to(&ask(ty, 12, round % 2 == 1), (GROUP, 5353)).await;
+            }
+        }
+        // Hosts whose address did not come with their SRV.
+        let missing: Vec<String> = r.srv.values().map(|(h, _)| h.to_ascii_lowercase()).filter(|h| !h.is_empty() && !r.a.contains_key(h)).collect();
+        for h in missing.iter().take(32) {
+            let _ = sock.send_to(&ask(h, 1, false), (GROUP, 5353)).await;
+        }
+        let until = if round + 1 == rounds { deadline } else { start + Duration::from_secs(round as u64 + 1) };
+        loop {
+            let got = tokio::time::timeout_at(until, async {
+                match &group {
+                    Some(g) => tokio::select! {
+                        x = sock.recv_from(&mut buf) => x.map(|(n, _)| (n, false)),
+                        x = g.recv_from(&mut buf2) => x.map(|(n, _)| (n, true)),
+                    },
+                    None => sock.recv_from(&mut buf).await.map(|(n, _)| (n, false)),
+                }
+            })
+            .await;
+            let Ok(Ok((n, from_group))) = got else { break };
+            let msg = if from_group { &buf2[..n] } else { &buf[..n] };
+            // Answers only (QR set): the questions of other askers are not records.
+            if msg.len() > 2 && msg[2] & 0x80 != 0 {
+                collect(msg, &mut r);
+            }
+        }
     }
-    Ok(services(&r))
+    Ok(services(&r, types))
 }
 
 #[cfg(test)]
@@ -176,7 +245,7 @@ mod tests {
         record(&mut m, "VMIX-01 (Output 1)._ndi._tcp.local", 16, b"\x0bgroups=prod");
         let mut r = Records::default();
         collect(&m, &mut r).unwrap();
-        let s = services(&r);
+        let s = services(&r, &["_ndi._tcp.local"]);
         assert_eq!(s.len(), 1);
         assert_eq!((s[0].kind.as_str(), s[0].name.as_str(), s[0].port), ("NDI", "VMIX-01 (Output 1)", 5960));
         assert_eq!((s[0].ip, s[0].host.as_str()), (Some(Ipv4Addr::new(10, 10, 0, 120)), "vmix-01.local"));

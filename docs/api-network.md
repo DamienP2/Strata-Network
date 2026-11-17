@@ -446,12 +446,20 @@ interface NotificationSettings {   // admin only; secrets sent masked "•••
 
 interface NmosSettings {       // admin only
   enabled: boolean;
-  url: string;                 // the Query API as typed: "http://10.1.1.20:8010" or "…/x-nmos/query/v1.3" (trailing / removed)
-  version: 'v1.2' | 'v1.3';    // read: <url up to /x-nmos/query>/x-nmos/query/<version>
+  source: 'registry' | 'nodes';   // registry: the Query API at url; nodes: the Node APIs themselves (no registry, see NMOS below)
+                               // missing (saved before 0.1.14): 'registry' when url is set, else 'nodes'
+  url: string;                 // registry: the Query API as typed: "http://10.1.1.20:8010" or "…/x-nmos/query/v1.3" (trailing / removed)
+  version: 'v1.2' | 'v1.3';    // registry: read <url up to /x-nmos/query>/x-nmos/query/<version>
   refresh: 'live' | '60s';     // live: polled every 5 s (no Query API subscription: nothing is created on the registry)
+  nodeUrls: string[];          // nodes: Node APIs typed by hand, stored as "<http|https>://<host>[:port]" ("10.1.1.7:8080",
+                               // "https://gw.lan/x-nmos/node/v1.3/" accepted), always polled; ≤ 100, duplicates removed
+  probeScan: boolean;          // nodes: also look for Node APIs on the web ports of the scanned machines (default true)
+  ranges: string[];            // nodes: where to look, CIDR "10.99.0.0/16" (any size) or "10.1.1.10-10.1.1.50"; ≤ 100;
+                               // [] = automatic: the scan networks a local interface is in, else everywhere
 }
 interface NmosStatus {
-  enabled: boolean; url: string /* the Query API read, '' when off */; version: string; refresh: 'live' | '60s';
+  enabled: boolean; source: 'registry' | 'nodes';
+  url: string /* the Query API read, '' when off or nodes */; version: string; refresh: 'live' | '60s';
   registry?: string;           // its mDNS instance name (same address and port), else its host
   backup?: string;             // another Query API found by mDNS
   at: number;                  // last good read (0: none); its data stay in use while the registry does not answer
@@ -460,17 +468,31 @@ interface NmosStatus {
   receivers: number; subscribed: number /* subscription.sender_id set, active not false */;
   unknown: number;             // nodes (in the last read) none of whose addresses or MACs the inventory knows
   withoutSdp: number;          // senders whose SDP could not be read: not in the flows
+  // nodes mode (0 / [] in registry mode); `at` is the last good read of any node, `error` set only when none answers
+  polled: number;              // Node APIs polled (found by any way)
+  answering: number; unreachable: number;   // answered their last poll / the others (missed it, or never answered)
+  mdns: number; scan: number; manual: number;   // found that way (one node may count in several)
+  apis: string[];              // Node API versions read ("v1.2", "v1.3")
+  ifaces: string[];            // local interface addresses mDNS asks on
 }
 interface NmosNode {           // GET /api/nmos/nodes, present ones first, by label
   id: string; label: string; hostname?: string;
+                               // nodes mode: a Node API found that never answered is a row too (id = its url, label = its mDNS
+                               // name else host, present false, seen 0, error set)
   maker?: string;              // "Cobalt · BIDI4": asset tags (BCP-002-02) manufacturer and product, of the node else of its devices
-  ip?: string;                 // its API endpoint (else href) address, else a media address
-  ips: string[];               // API and media addresses (sources of its senders' SDPs)
-  name?: string;               // its name in the inventory
+  ip?: string;                 // management: its API endpoint (else href, else the address it was reached at), else a media address
+  ips: string[];               // every address: API, then media
+  media: string[];             // media addresses that are not API ones: sources of its senders' SDPs or IS-05 active
+                               // (source_ip), IS-05 interface_ip of its receivers
+  name?: string;               // its name in the inventory (first address that has one, management first)
   senders: number; receivers: number;
-  at: Attach[];                // the switch ports it is on, most certain first
-  inventory: boolean;
-  seen: number; present: boolean;   // last read it was in; nodes that left stay 10 min with present false
+  at: Attach[];                // the switch ports it is on: those of its media addresses first, then the others
+  inventory: boolean;          // one of its addresses (management or media) or MACs is in the inventory
+  seen: number; present: boolean;   // last read it was in (nodes mode: its last good read; 0 never); gone nodes stay 10 min
+  found: 'mdns' | 'scan' | 'manual' | 'registry';   // the first of foundBy
+  foundBy: ('mdns' | 'scan' | 'manual' | 'registry')[];   // every way it was found (one row a node, even at several addresses)
+  url?: string; api?: string;  // nodes mode: the Node API polled ("http://10.99.0.7:8080") and its version ("v1.3")
+  lastOk?: number; error?: string;   // nodes mode: last good read, last poll's error (cleared by a good one)
 }
 interface NmosFound {          // a Query API found by mDNS (_nmos-query._tcp)
   name: string; host: string; ip?: string; port: number;
@@ -536,10 +558,10 @@ interface SnmpRow {            // raw SNMP explorer
 | `PUT /api/multicast/options` | `{checkEnabled?, floodWatch?}` → 204 | admin; stored in multicast.json (`checkEnabled` default false, `floodWatch` default true); history "changed multicast settings" |
 | `GET /api/services` | → `{at: number, services: Service[]}` | mDNS; `changed: services` |
 | `GET /api/nmos` | → `NmosSettings` | admin; `changed: nmos` |
-| `PUT /api/nmos` | `NmosSettings` → `NmosSettings` | admin; reads at once; 400 "the nmos version is v1.2 or v1.3", "the nmos refresh is live or 60s", "the registry address cannot be empty" (enabled), "the registry address is written http://host:port"; history "changed nmos settings" (detail "on · <url> · v1.3 · live") |
-| `POST /api/nmos/test` | `{url?, version?}` (default: the saved ones) → `{url, nodes, devices, senders, receivers, ms}` | admin; one read of nodes, devices, senders, receivers (GET, paged); 400 as `PUT`; 502 + "nmos: timed out" / "nmos: unknown host" / "nmos: tls failed" / "nmos: cannot reach the registry" / "nmos: the registry answered <status>" / "nmos: not a query api" (not a JSON array) / "nmos: the answer is too big" / "nmos: bad url" |
-| `GET /api/nmos/discovered` | → `{at, registries: NmosFound[]}` | admin; preferred first (`pri`, then name); asks the network again (mDNS, 3 s) when the last answers are older than 60 s |
-| `GET /api/nmos/status` | → `NmosStatus` | `changed: nmos` (after each read) |
+| `PUT /api/nmos` | `NmosSettings` → `NmosSettings` | admin; reads at once; 400 "the nmos source is registry or nodes", "the nmos version is v1.2 or v1.3", "the nmos refresh is live or 60s", "the registry address cannot be empty" (enabled, registry), "the registry address is written http://host:port", "the node address is written http://host:port", "at most 100 node addresses", "nmos range <r>: <why>", "at most 100 nmos ranges"; history "changed nmos settings" (detail "on · <url> · v1.3 · live", nodes: "on · nodes · <urls> · scan on · live") |
+| `POST /api/nmos/test` | `{source?, url?, version?, nodeUrls?, ranges?}` (default: the saved ones) → registry: `{url, nodes, devices, senders, receivers, ms}`; nodes: `{ifaces, mdns, nodes: NmosChecked[], ms}` | admin; registry: one read of nodes, devices, senders, receivers (GET, paged); 400 as `PUT`; 502 + "nmos: timed out" / "nmos: unknown host" / "nmos: tls failed" / "nmos: cannot reach the registry" / "nmos: the registry answered <status>" / "nmos: not a query api" (not a JSON array) / "nmos: the answer is too big" / "nmos: bad url". Nodes: asks mDNS on the interfaces of the ranges (≈ 5 s; the answers also feed the discovery), then reads each Node API heard and each typed (version, `self`, senders, receivers; 8 at once): `NmosChecked {url, found: ('mdns' \| 'manual')[], ok, label?, api?, senders, receivers, error?}`, errors "nmos: the node does not answer in time" / "nmos: cannot reach the node" / "nmos: the node answered <status>" / "nmos: not a node api" / "nmos: no supported node api version" / "nmos: unknown host" / "nmos: tls failed" |
+| `GET /api/nmos/discovered` | → `{at, registries: NmosFound[]}` | admin; preferred first (`pri`, then name); asks the network again (mDNS, ≈ 4 s) when the last answers are older than 60 s |
+| `GET /api/nmos/status` | → `NmosStatus` | `changed: nmos` (after each read; nodes mode: when the flows change, else at most every 5 s) |
 | `GET /api/nmos/nodes` | → `NmosNode[]` | `changed: nmos`; `[]` when off or never read |
 | `POST /api/services/browse` | → 202 | one question per service type, answers for 3 s |
 | `GET /api/alerts` | → `Alert[]` (newest first, ≤ 500) | `changed: alerts` |
@@ -617,8 +639,10 @@ WebSocket, besides `changed`:
     switches they were on are still read; `groupConflict`; `flooding` (per interface and VLAN); `pairMissing` (a live
     leg whose pair is missing); `ptpGmChange`; `ptpDomain` (a live clock or device not in the main domain). Conditions
     must hold 15 s, then are raised once until they clear; transitions (`streamGone`, `ptpGmChange`) at once.
-- **NMOS** (`net/nmos.rs`, `net/mflows/registry.rs`): read only, HTTP GET and nothing else — no registration, no
-  IS-05 connection, no Query API subscription (WebSocket), never a write to the registry or a node.
+- **NMOS** (`net/nmos.rs`, `net/nmos/peers.rs`, `net/mflows/registry.rs`): read only, HTTP GET and nothing else — no
+  registration, no IS-05 connection change (only `GET …/active`, nodes mode), no Query API subscription (WebSocket),
+  never a POST / PUT / PATCH / DELETE to the registry or a node. Two sources (`source`): a registry (below), or the
+  nodes themselves (*Nodes mode*); both give the flows the same model.
   - *Reads*: while `enabled`, every 5 s (`live`) or 60 s, and at once after `PUT /api/nmos`: `nodes`, `devices`,
     `sources`, `flows`, `senders`, `receivers` of the Query API, each from `?paging.since=0:0&paging.limit=500`
     following `Link: rel="next"` (else `X-Paging-Until`) until a page is empty, shorter than `X-Paging-Limit`, or
@@ -654,7 +678,50 @@ WebSocket, besides `changed`:
     is an inventory address, or one of its MACs an inventory address's MAC. An emitter without inventory name takes
     its node's name, without port its node's port for that address (or its only port).
   - *mDNS*: `_nmos-query._tcp` (kind "NMOS Query") with the other service types (`POST /api/services/browse`, every
-    10 min); `_nmos-register._tcp` services are not offered (only Query APIs are read).
+    10 min); `_nmos-register._tcp` services are not offered (only Query APIs are read). Every mDNS browse asks twice
+    (1 s apart), from a passing port (answered directly) and, when port 5353 can be shared with the machine's own
+    responder, from 5353 joined to 224.0.0.251 (QM then QU: devices that answer to the group, and their unsolicited
+    announcements, are heard too); hosts named by a SRV without their address are asked for it (A).
+  - *Nodes mode* (`net/nmos/peers.rs`), for networks without registry (IS-04 peer-to-peer):
+    - *Where*: `ranges` (else the scan networks a local interface is in, else everywhere). mDNS `_nmos-node._tcp`
+      is asked on every local interface whose address is in a range (one socket each: mDNS does not cross VLANs, a
+      server with an OOB and an IB interface asks on both), 3 times 1 s apart, 3 s for the answers, every 60 s. A
+      Node API heard stays polled 10 min after it was last heard, and as long as it answers. `<api_proto>://<ip,
+      else host>:<port>`.
+    - *Scan* (`probeScan`): the inventory addresses inside the ranges that have a web port (scan `ports[].web`) are
+      asked `GET <scheme>://ip:port/x-nmos/node/` (each web port until one answers a list of versions), 16 machines a
+      round, 4 at once, 1 s to connect, 2 s a request, each machine at most once an hour; never the addresses of a node
+      already known. A Node API found stays polled 10 min after it was found, and as long as it answers.
+    - *Typed* (`nodeUrls`): always polled (mDNS may not reach them).
+    - *One node*: a Node API reached at several addresses (mDNS name and IP, OOB and typed…) is one node (same
+      `self.id`): one row, `foundBy` every way, the data of the first (mDNS, scan, typed).
+    - *Polls*: each node every 5 s (`live`) or 60 s, each on its own schedule (from its last poll), at most 8 at once;
+      2 s to connect, 5 s a request, no proxy, equipment certificates accepted (self-signed; only GETs go there).
+      `GET <base>/x-nmos/node/` picks the version (v1.3, else v1.2, else v1.1; asked again after a failed poll), then
+      `self`, `devices`, `sources`, `flows`, `senders`, `receivers` (16 MB each). SDP: as the registry's (2 at once a
+      node). IS-05 (device `controls` `urn:x-nmos:control:sr-ctrl/v1.1`, else v1.0): `GET <href>/single/senders/<id>/active`
+      for the RTP senders without a usable SDP, `GET <href>/single/receivers/<id>/active` for every receiver, read again
+      when the resource's `version` changes, else every 60 s (64 a poll at most, the rest next time; never `staged`).
+    - *IS-05 → model*: a sender's enabled legs (`rtp_enabled` not false, `master_enable` not false) with a multicast
+      `destination_ip` are its medias (port: `destination_port`, else 5004; source: `source_ip`; two legs: an ST
+      2022-7 pair), with the format its IS-04 flow describes (`media_type` → standard, size, `grain_rate`, components →
+      sampling and depth, `sample_rate`, `bit_depth`; channels of its source): `estBps` works as with an SDP; no SDP
+      text (`GET /api/multicast/sdp` 404). `master_enable` stands for `subscription.active` when the node has none
+      (v1.1). A receiver's enabled legs give the groups it is set to (`multicast_ip`, `source_ip`, `destination_port`),
+      its `sender_id` when IS-04 has none, and its `interface_ip` its node's media address.
+    - *Grace*: a node that misses a poll keeps its last data; after 3 missed polls in a row it is gone (`present`
+      false): its senders stay 10 min after its last good read as `idle` flows (`nmos.unreachable`: not live, no
+      `gone`, no `streamGone` — an unreachable management API says nothing of the media, the node row says it), its
+      receivers are dropped; then it goes. Past the grace period (and a Node API that never answered after 3 tries) it is
+      polled every 30 s at most often. A node removed from the settings while answering starts the alert watcher
+      again (no `streamGone` storm). `error` of the status only when no node answers.
+  - *Receivers by group* (nodes mode): a receiver set by IS-05 to a flow's group (same port and source when both are
+    known) is a subscriber of that flow even without `sender_id`, and of any flow (SAP, IGMP or NMOS): who receives
+    what without the switches' IGMP tables. They count in `subscribed` and `receiverCount` as the others.
+  - *OOB / IB*: a node's management (API) and media addresses (SDP / IS-05 sources, receivers' `interface_ip`) are
+    one device: `inventory` when any of them (or a MAC) is an inventory address; its ports: the media addresses' first
+    (the emitter of its flows is its media source, on that port; its subscribers are placed there), the management
+    address stays `ip`.
 - **Online switches** (read-only SNMP v2c): a task per online switch reads the interfaces' state and 64-bit counters
   every `onlineSecs` (also at server start for the switches saved online), the identity (system group, ENTITY-MIB
   chassis) and the VLAN setup (Q-BRIDGE-MIB) every 5 min. Interfaces are matched to the faceplate ports by name

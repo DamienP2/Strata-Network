@@ -1,9 +1,12 @@
-//! The NMOS registry in the flows (`docs/api-network.md` § NMOS): its senders
-//! become flows, merged by group and port with what SAP, packets and snooping
-//! said; its receivers' subscriptions become the flows' subscribers; its nodes
-//! are placed on switch ports and matched with the inventory.
+//! The NMOS registry (or the nodes read directly) in the flows
+//! (`docs/api-network.md` § NMOS): its senders become flows, merged by group and
+//! port with what SAP, packets and snooping said; its receivers' subscriptions
+//! (and IS-05 multicast groups) become the flows' subscribers; its nodes are
+//! placed on switch ports and matched with the inventory by every address they
+//! have (management API and media).
 
 use super::*;
+use crate::net::nmos::peers::FoundBy;
 use crate::net::nmos::{norm_mac, Node, Registry};
 
 /// What a flow takes from its NMOS sender.
@@ -23,6 +26,9 @@ pub struct NmosRef {
     /// `subscription.active` of the sender (v1.2+).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active: Option<bool>,
+    /// Nodes mode: its node no longer answers (kept, not live).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unreachable: bool,
 }
 
 /// An NMOS receiver set to receive the flow's sender.
@@ -52,10 +58,12 @@ pub struct NodeView {
     /// "Cobalt · BIDI4" (asset tags).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maker: Option<String>,
-    /// Its API address, else a media address.
+    /// Its API (management) address, else a media address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ip: Option<Ipv4Addr>,
     pub ips: Vec<Ipv4Addr>,
+    /// Its media addresses that are not API addresses (SDP / IS-05 sources, IS-05 receiving interfaces).
+    pub media: Vec<Ipv4Addr>,
     /// Its name in the inventory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -64,16 +72,32 @@ pub struct NodeView {
     /// The switch ports it is plugged on (first: the most certain).
     pub at: Vec<Attach>,
     pub inventory: bool,
-    /// Last read it was in (unix ms); `present`: in the last read.
+    /// Last read it was in (unix ms; 0: never answered); `present`: in the last read.
     pub seen: i64,
     pub present: bool,
+    /// How it was found ("registry", else the first of `foundBy`), and every way.
+    pub found: FoundBy,
+    pub found_by: Vec<FoundBy>,
+    /// Nodes mode: its Node API, the version read, last good read, last error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_ok: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Where a node is.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Place {
     pub ips: Vec<Ipv4Addr>,
+    /// Media addresses (not API ones).
+    pub media: Vec<Ipv4Addr>,
     pub at: Vec<Attach>,
+    /// The ports of its media addresses (the media network), first of `at`.
+    pub media_at: Vec<Attach>,
     /// The port each address was found on.
     pub at_by_ip: HashMap<Ipv4Addr, Attach>,
     pub inventory: bool,
@@ -100,15 +124,25 @@ fn push_at(list: &mut Vec<Attach>, a: Attach) {
 impl<'a> Index<'a> {
     pub fn new(reg: &'a Registry, cx: &Ctx) -> Index<'a> {
         let node_of_device: HashMap<&str, &Node> = reg.devices.iter().filter_map(|d| Some((d.id.as_str(), reg.nodes.iter().chain(reg.gone.iter()).find(|n| n.id == d.node_id)?))).collect();
-        // Media addresses of each node: the sources of its senders' SDPs.
+        // Media addresses of each node: the sources of its senders' SDPs (or IS-05),
+        // the interfaces its receivers receive on (IS-05).
         let mut media: HashMap<&str, Vec<Ipv4Addr>> = HashMap::new();
+        let mut add = |node: &'a str, ip: Ipv4Addr| {
+            let v = media.entry(node).or_default();
+            if !v.contains(&ip) && !ip.is_unspecified() && !ip.is_loopback() {
+                v.push(ip);
+            }
+        };
         for s in &reg.senders {
             let Some(n) = node_of_device.get(s.device_id.as_str()) else { continue };
             for ip in reg.medias(&s.id).iter().filter_map(|m| m.source) {
-                let v = media.entry(n.id.as_str()).or_default();
-                if !v.contains(&ip) {
-                    v.push(ip);
-                }
+                add(n.id.as_str(), ip);
+            }
+        }
+        for r in &reg.receivers {
+            let Some(n) = node_of_device.get(r.device_id.as_str()) else { continue };
+            for ip in &r.ifaces {
+                add(n.id.as_str(), *ip);
             }
         }
         let chassis = chassis_of_switches(cx);
@@ -157,6 +191,7 @@ fn place(n: &Node, media: &[Ipv4Addr], cx: &Ctx, chassis: &HashMap<String, Strin
             p.ips.push(*ip);
         }
     }
+    p.media = media.iter().filter(|ip| !n.ips.contains(ip)).copied().collect();
     let mut macs: Vec<String> = n.macs.clone();
     for ip in &p.ips {
         if let Some(m) = cx.mac_of(*ip).as_deref().and_then(norm_mac) {
@@ -218,6 +253,14 @@ fn place(n: &Node, media: &[Ipv4Addr], cx: &Ctx, chassis: &HashMap<String, Strin
             push_at(&mut p.at, a);
         }
     }
+    // The media network first: where its media addresses are.
+    for ip in &p.media {
+        if let Some(a) = p.at_by_ip.get(ip) {
+            push_at(&mut p.media_at, a.clone());
+        }
+    }
+    let rest: Vec<Attach> = p.at.iter().filter(|a| !p.media_at.iter().any(|m| m.switch_id == a.switch_id && m.n == a.n && m.port == a.port)).cloned().collect();
+    p.at = p.media_at.iter().cloned().chain(rest).collect();
     p
 }
 
@@ -312,8 +355,9 @@ pub(super) fn merge_senders(flows: &mut Vec<Flow>, idx: &Index, cx: &Ctx) {
             node: node.map(|n| n.label.clone()),
             inventory: place.is_some_and(|p| p.inventory),
             active: s.active,
+            unreachable: s.stale,
         };
-        let on = s.active != Some(false);
+        let on = s.active != Some(false) && !s.stale;
         let kind = kind_of(reg.sender_format(s));
         for m in reg.medias(&s.id) {
             let Some(group) = m.group.filter(|g| g.is_multicast() && !control_group(*g)) else { continue };
@@ -376,12 +420,14 @@ pub(super) fn merge_senders(flows: &mut Vec<Flow>, idx: &Index, cx: &Ctx) {
     }
 }
 
-/// The receivers subscribed to the flow's sender; a snooping receiver on the
-/// same port as one of them is that subscriber (named after its node when the
-/// inventory has no name for it).
+/// The receivers subscribed to the flow's sender, or set (IS-05, nodes mode) to
+/// its group (any flow, NMOS or not); a snooping receiver on the same port as one
+/// of them is that subscriber (named after its node when the inventory has no
+/// name for it). Their port: the one of their media addresses first.
 pub(super) fn subscribers(f: &mut Flow, idx: &Index) {
-    let Some(sid) = f.nmos.as_ref().map(|n| n.sender_id.clone()) else { return };
-    for r in idx.reg.receivers.iter().filter(|r| r.subscribed() == Some(sid.as_str())) {
+    let sid = f.nmos.as_ref().map(|n| n.sender_id.clone());
+    let (group, port, source) = (f.group, f.port, f.source);
+    for r in idx.reg.receivers.iter().filter(|r| (sid.is_some() && r.subscribed() == sid.as_deref()) || r.receives(group, port, source)) {
         let node = idx.node(&r.device_id);
         let place = node.and_then(|n| idx.place(&n.id));
         let ats: &[Attach] = place.map(|p| p.at.as_slice()).unwrap_or(&[]);
@@ -414,12 +460,15 @@ pub(super) fn emitter(f: &mut Flow, idx: &Index) {
                 e.name = place.name.clone().or(label);
             }
             if e.at.is_none() {
-                e.at = place.at_by_ip.get(&e.ip).cloned().or_else(|| (place.at.len() == 1).then(|| place.at[0].clone()));
+                // Its only port, unless its other media addresses are placed and this one is not
+                // (an ST 2022-7 leg on another network).
+                let elsewhere = place.media.contains(&e.ip) && !place.media_at.is_empty();
+                e.at = place.at_by_ip.get(&e.ip).cloned().or_else(|| (place.at.len() == 1 && !elsewhere).then(|| place.at[0].clone()));
             }
         }
         None => {
-            if let Some(ip) = place.ips.first() {
-                f.emitter = Some(Emitter { ip: *ip, name: place.name.clone().or(label), mac: None, at: place.at.first().cloned() });
+            if let Some(ip) = place.media.first().or(place.ips.first()) {
+                f.emitter = Some(Emitter { ip: *ip, name: place.name.clone().or(label), mac: None, at: place.at_by_ip.get(ip).cloned().or_else(|| place.at.first().cloned()) });
             }
         }
     }
@@ -439,6 +488,8 @@ pub fn nodes(inp: &Input) -> Vec<NodeView> {
             let devices: Vec<&crate::net::nmos::Device> = reg.devices.iter().filter(|d| d.node_id == n.id).collect();
             let mine = |id: &str| devices.iter().any(|d| d.id == id);
             let p = idx.place(&n.id).cloned().unwrap_or_default();
+            let direct = reg.direct.get(&n.id);
+            let found_by = direct.map(|d| d.found.clone()).filter(|f| !f.is_empty()).unwrap_or_else(|| vec![FoundBy::Registry]);
             NodeView {
                 id: n.id.clone(),
                 label: n.label.clone(),
@@ -446,6 +497,7 @@ pub fn nodes(inp: &Input) -> Vec<NodeView> {
                 maker: n.maker(&devices),
                 ip: n.ips.first().copied().or_else(|| p.ips.first().copied()),
                 ips: p.ips,
+                media: p.media,
                 name: p.name,
                 senders: reg.senders.iter().filter(|s| mine(&s.device_id)).count(),
                 receivers: reg.receivers.iter().filter(|r| mine(&r.device_id)).count(),
@@ -453,9 +505,33 @@ pub fn nodes(inp: &Input) -> Vec<NodeView> {
                 inventory: p.inventory,
                 seen: reg.seen.get(&n.id).copied().unwrap_or(reg.at),
                 present,
+                found: found_by[0],
+                found_by,
+                url: direct.map(|d| d.url.clone()),
+                api: direct.and_then(|d| d.api.clone()),
+                last_ok: direct.map(|d| d.last_ok).filter(|t| *t > 0),
+                error: direct.and_then(|d| d.error.clone()),
             }
         })
         .collect();
+    // Node APIs found that never answered.
+    for u in &reg.unread {
+        let ip = crate::net::nmos::peers::base_ip(&u.url);
+        let label = u.name.clone().or_else(|| crate::net::nmos::host_port(&u.url).map(|(h, _)| h)).unwrap_or_else(|| u.url.clone());
+        out.push(NodeView {
+            id: u.url.clone(),
+            label,
+            ip,
+            ips: ip.into_iter().collect(),
+            name: ip.and_then(|ip| cx.addr_name(ip)),
+            inventory: ip.is_some_and(|ip| inp.addresses.contains_key(&ip)),
+            found: u.found.first().copied().unwrap_or_default(),
+            found_by: u.found.clone(),
+            url: Some(u.url.clone()),
+            error: u.error.clone(),
+            ..NodeView::default()
+        });
+    }
     out.sort_by(|a, b| b.present.cmp(&a.present).then_with(|| a.label.to_lowercase().cmp(&b.label.to_lowercase())));
     out
 }
